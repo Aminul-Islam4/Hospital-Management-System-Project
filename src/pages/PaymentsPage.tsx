@@ -1,0 +1,649 @@
+import React, { useState, useEffect } from 'react';
+import { api } from '../services/api.ts';
+import { Payment, Visit, User } from '../types/index.ts';
+import {
+  CreditCard,
+  Search,
+  FileSpreadsheet,
+  Stethoscope,
+  CheckCircle2,
+  Tag,
+  X,
+  RotateCcw,
+  Phone,
+  Eye,
+  Receipt,
+} from 'lucide-react';
+import { UndoPaymentConfirmModal, UndoPaymentTarget } from '../components/UndoPaymentConfirmModal.tsx';
+
+interface PaymentsPageProps {
+  onOpenRecordPayment?: (visit: any, initialMode?: 'payment' | 'discount') => void;
+  onSelectPatient?: (patientId: number) => void;
+}
+
+export const PaymentsPage: React.FC<PaymentsPageProps> = ({ onOpenRecordPayment, onSelectPatient }) => {
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [pendingVisits, setPendingVisits] = useState<Visit[]>([]);
+  const [doctors, setDoctors] = useState<User[]>([]);
+  const [selectedMethod, setSelectedMethod] = useState<string>('All');
+  const [selectedCollectorId, setSelectedCollectorId] = useState<string>('All');
+  const [fromDate, setFromDate] = useState<string>('');
+  const [toDate, setToDate] = useState<string>('');
+  const [searchTerm, setSearchTerm] = useState<string>('');
+  const [activeView, setActiveView] = useState<'ledger' | 'pending'>('ledger');
+  const [loading, setLoading] = useState<boolean>(true);
+  const [undoTargetPayment, setUndoTargetPayment] = useState<UndoPaymentTarget | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+
+  useEffect(() => {
+    api.getDoctors().then(setDoctors).catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    fetchPayments();
+    fetchPendingVisits();
+  }, [selectedMethod, selectedCollectorId, fromDate, toDate, searchTerm]);
+
+  const fetchPayments = async () => {
+    setLoading(true);
+    try {
+      const data = await api.getPayments({
+        method: selectedMethod !== 'All' ? selectedMethod : undefined,
+        receivedBy: selectedCollectorId !== 'All' ? selectedCollectorId : undefined,
+        fromDate: fromDate.trim() || undefined,
+        toDate: toDate.trim() || undefined,
+        search: searchTerm.trim() || undefined,
+      });
+      setPayments(data);
+    } catch (e) {
+      console.error('Failed to load payments:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchPendingVisits = async () => {
+    try {
+      const data = await api.getVisits({
+        hasDue: true,
+        doctorId: selectedCollectorId !== 'All' ? parseInt(selectedCollectorId) : undefined,
+        fromDate: fromDate.trim() || undefined,
+        toDate: toDate.trim() || undefined,
+        search: searchTerm.trim() || undefined,
+      });
+      setPendingVisits(data);
+    } catch (e) {
+      console.error('Failed to load pending visits:', e);
+    }
+  };
+
+  const handleResetFilters = () => {
+    setSearchTerm('');
+    setSelectedMethod('All');
+    setSelectedCollectorId('All');
+    setFromDate('');
+    setToDate('');
+  };
+
+  const handleDeletePayment = async (paymentId: number) => {
+    setDeletingId(paymentId);
+    try {
+      await api.deletePayment(paymentId);
+      setUndoTargetPayment(null);
+      await Promise.all([fetchPayments(), fetchPendingVisits()]);
+    } catch (e) {
+      console.error('Failed to undo payment:', e);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const hasActiveFilters =
+    Boolean(searchTerm.trim()) ||
+    selectedMethod !== 'All' ||
+    selectedCollectorId !== 'All' ||
+    Boolean(fromDate) ||
+    Boolean(toDate);
+
+  const totalCollected = payments.reduce((sum, p) => sum + parseFloat(p.amount || '0'), 0);
+  const totalOutstandingClinicDue = pendingVisits.reduce(
+    (sum, v) => sum + parseFloat(v.outstandingDue || '0'),
+    0
+  );
+
+  // Group by method
+  const methodTotals: Record<string, number> = {};
+  for (const p of payments) {
+    methodTotals[p.paymentMethod] = (methodTotals[p.paymentMethod] || 0) + parseFloat(p.amount || '0');
+  }
+
+  const getMethodBadgeStyle = (method: string) => {
+    switch (method) {
+      case 'bKash':
+        return 'bg-pink-50 text-pink-800 border-pink-200';
+      case 'Nagad':
+        return 'bg-orange-50 text-orange-800 border-orange-200';
+      case 'Bank transfer':
+        return 'bg-blue-50 text-blue-800 border-blue-200';
+      case 'Cash':
+        return 'bg-emerald-50 text-emerald-800 border-emerald-200';
+      default:
+        return 'bg-slate-100 text-slate-800 border-slate-200';
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <Receipt className="w-5 h-5 text-teal-600" />
+            <h1 className="text-xl font-bold text-slate-900">Professional Payment &amp; Dues History</h1>
+            <span className="text-xs font-semibold px-2.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+              Multi-Doctor Collection Ledger
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Complete installment payment tracking, collector doctor attribution, mobile banking references (bKash/Nagad), and outstanding dues.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => api.downloadCsv('/api/export/payments.csv', 'dental_payments.csv')}
+            className="px-3 py-2 text-xs font-semibold rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+            <span>Export Payments CSV</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
+        <div
+          onClick={() => setActiveView('ledger')}
+          className={`p-3.5 rounded-xl border cursor-pointer transition-all col-span-2 sm:col-span-1 ${
+            activeView === 'ledger'
+              ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-200'
+              : 'bg-white hover:bg-emerald-50/40 border-slate-200'
+          }`}
+        >
+          <span className="text-slate-500 block mb-0.5 font-semibold">Total Collected</span>
+          <span className="text-xl font-extrabold text-emerald-700">
+            ৳{totalCollected.toLocaleString()}
+          </span>
+          <span className="text-[11px] text-slate-500 block mt-0.5">{payments.length} receipt(s)</span>
+        </div>
+
+        <div
+          onClick={() => setActiveView('pending')}
+          className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+            activeView === 'pending'
+              ? 'bg-amber-100 border-amber-400 ring-2 ring-amber-300'
+              : 'bg-white hover:bg-amber-50/60 border-slate-200'
+          }`}
+        >
+          <span className="text-slate-500 block mb-0.5 font-semibold">Outstanding Dues</span>
+          <span className="text-base font-extrabold text-amber-800">
+            ৳{totalOutstandingClinicDue.toLocaleString()}
+          </span>
+          <span className="text-[11px] text-amber-700 block mt-0.5 font-bold">
+            {pendingVisits.length} unpaid visit(s) &rarr;
+          </span>
+        </div>
+
+        {['Cash', 'bKash', 'Nagad'].map((m) => (
+          <div key={m} className="bg-white p-3.5 rounded-xl border border-slate-200">
+            <span className="text-slate-500 block mb-0.5">{m} Collections</span>
+            <span className="text-base font-bold text-slate-900">
+              ৳{(methodTotals[m] || 0).toLocaleString()}
+            </span>
+            <span className="text-[10px] text-slate-400 block mt-0.5">
+              {payments.filter((p) => p.paymentMethod === m).length} txns
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Unified Filter Bar for Both Views */}
+      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
+        <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+            <input
+              type="text"
+              placeholder="Search by Receipt ID (PAY-1001), Patient Name, Patient ID (DP-1001), Phone, Visit Code, or TrxID..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-8 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500 bg-slate-50/50 focus:bg-white"
+            />
+            {searchTerm && (
+              <button
+                type="button"
+                onClick={() => setSearchTerm('')}
+                className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-slate-500 whitespace-nowrap">
+              {activeView === 'ledger'
+                ? `${payments.length} receipt(s)`
+                : `${pendingVisits.length} pending visit(s)`}
+            </span>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:text-rose-700 bg-slate-100 hover:bg-rose-50 rounded-lg flex items-center gap-1 transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Reset Filters</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="pt-2 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+          {/* Payment Method */}
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+              Payment Method
+            </label>
+            <select
+              value={selectedMethod}
+              onChange={(e) => setSelectedMethod(e.target.value)}
+              className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-teal-500"
+            >
+              <option value="All">All Payment Methods</option>
+              <option value="Cash">Cash</option>
+              <option value="bKash">bKash</option>
+              <option value="Nagad">Nagad</option>
+              <option value="Bank transfer">Bank transfer</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+
+          {/* Collected By / Attending Doctor */}
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+              {activeView === 'ledger' ? 'Collected By Doctor' : 'Attending Doctor'}
+            </label>
+            <select
+              value={selectedCollectorId}
+              onChange={(e) => setSelectedCollectorId(e.target.value)}
+              className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-teal-500"
+            >
+              <option value="All">All Clinic Doctors</option>
+              {doctors.map((d) => (
+                <option key={d.id} value={String(d.id)}>
+                  {d.fullName}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Date From */}
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+              Date From
+            </label>
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+              className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-teal-500"
+            />
+          </div>
+
+          {/* Date To */}
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+              Date To
+            </label>
+            <input
+              type="date"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+              className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-teal-500"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Sub-Tabs: Transactions Ledger vs Pending Dues */}
+      <div className="flex items-center gap-2 border-b border-slate-200 text-xs font-semibold">
+        <button
+          type="button"
+          onClick={() => setActiveView('ledger')}
+          className={`px-4 py-2.5 border-b-2 transition-colors cursor-pointer ${
+            activeView === 'ledger'
+              ? 'border-teal-600 text-teal-800 font-bold'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          Transactions &amp; Installments Ledger ({payments.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveView('pending')}
+          className={`px-4 py-2.5 border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer ${
+            activeView === 'pending'
+              ? 'border-amber-600 text-amber-900 font-bold'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <span>Pending Patient Dues</span>
+          <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-200 text-amber-900">
+            {pendingVisits.length}
+          </span>
+        </button>
+      </div>
+
+      {activeView === 'pending' ? (
+        /* PENDING DUES VIEW */
+        <div className="space-y-4">
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <span className="font-bold text-sm text-amber-900 block">
+                Unsettled Clinic Visits Awaiting Payment ({pendingVisits.length})
+              </span>
+              <p className="text-amber-800 mt-0.5">
+                Any doctor can collect full balance or record a partial installment directly with 1-click.
+              </p>
+            </div>
+            <span className="font-black text-base text-amber-900 bg-white px-3 py-1.5 rounded-lg border border-amber-300 shadow-2xs self-start sm:self-auto">
+              Total Due: ৳{totalOutstandingClinicDue.toLocaleString()}
+            </span>
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4">Visit ID</th>
+                    <th className="py-3 px-4">Patient</th>
+                    <th className="py-3 px-4">Attending Doctor</th>
+                    <th className="py-3 px-4">Visit Date</th>
+                    <th className="py-3 px-4 text-right">Total Cost</th>
+                    <th className="py-3 px-4 text-right">Amount Paid</th>
+                    <th className="py-3 px-4 text-right">Outstanding Due</th>
+                    <th className="py-3 px-4 text-center">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {pendingVisits.length > 0 ? (
+                    pendingVisits.map((v) => {
+                      const due = parseFloat(v.outstandingDue || '0');
+                      const prevCarried = v.previousCarriedDue || 0;
+                      const cumPayable = v.cumulativePayable ?? prevCarried + parseFloat(v.totalCost || '0');
+                      return (
+                        <tr
+                          key={v.id}
+                          className="hover:bg-amber-100/60 transition-colors cursor-pointer"
+                          onClick={() => onSelectPatient && onSelectPatient(v.patientId)}
+                          title="Click anywhere to view patient profile"
+                        >
+                          <td className="py-3.5 px-4 font-bold text-teal-700 whitespace-nowrap">
+                            <div>{v.visitId}</div>
+                            {v.visitSequenceNumber && (
+                              <span className="text-[10px] font-semibold text-slate-500">
+                                Visit #{v.visitSequenceNumber} of {v.patientTotalVisits || 1} (Latest)
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4">
+                            <div className="font-semibold text-slate-900">{v.patientName}</div>
+                            <div className="text-[11px] text-slate-500">
+                              <strong className="text-teal-700">{v.patientCode}</strong>
+                              {v.patientPhone ? ` • ${v.patientPhone}` : ''}
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-4 text-slate-800">{v.doctorName}</td>
+                          <td className="py-3.5 px-4 text-slate-600 whitespace-nowrap">{v.visitDate}</td>
+                          <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                            <div className="font-bold text-slate-900 font-mono">
+                              ৳{parseFloat(v.totalCost || '0').toLocaleString()}
+                            </div>
+                            {prevCarried > 0 && (
+                              <div className="text-[10px] text-amber-800 font-medium">
+                                +৳{prevCarried.toLocaleString()} prev. due (Total: ৳{cumPayable.toLocaleString()})
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3.5 px-4 text-right font-semibold text-emerald-700 whitespace-nowrap font-mono">
+                            ৳{parseFloat(v.amountPaid || '0').toLocaleString()}
+                          </td>
+                          <td className="py-3.5 px-4 text-right font-black text-amber-800 whitespace-nowrap font-mono">
+                            ৳{due.toLocaleString()}
+                          </td>
+                          <td className="py-3.5 px-4 text-center" onClick={(e) => e.stopPropagation()}>
+                            <div className="inline-flex items-center justify-center gap-1.5 whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => onOpenRecordPayment && onOpenRecordPayment(v)}
+                                className="px-2.5 py-1.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg shadow-2xs transition-colors flex items-center gap-1 cursor-pointer"
+                              >
+                                <CreditCard className="w-3.5 h-3.5" />
+                                <span>Record Payment</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan={8} className="py-8 text-center text-slate-400">
+                        No pending dues matching your filters.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* TRANSACTIONS LEDGER VIEW */
+        <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                <tr>
+                  <th className="py-3 px-4">Receipt ID &amp; Installment</th>
+                  <th className="py-3 px-4">Patient Details</th>
+                  <th className="py-3 px-4">Visit Code</th>
+                  <th className="py-3 px-4">Payment Date</th>
+                  <th className="py-3 px-4">Method &amp; TrxID</th>
+                  <th className="py-3 px-4">Collected By Doctor</th>
+                  <th className="py-3 px-4 text-right">Visit Balance Context</th>
+                  <th className="py-3 px-4 text-right">Amount Received</th>
+                  <th className="py-3 px-4 text-center">Profile</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {loading ? (
+                  <tr>
+                    <td colSpan={9} className="py-8 text-center text-slate-400">
+                      Loading payments ledger...
+                    </td>
+                  </tr>
+                ) : payments.length > 0 ? (
+                  payments.map((p) => {
+                    const visitTotal = parseFloat(p.visitTotalCost || '0');
+                    const visitDue = parseFloat(p.visitOutstandingDue || '0');
+                    const visitDisc = parseFloat(p.visitDiscount || '0');
+                    const instNum = p.patientInstallmentNumber || p.installmentNumber || 1;
+                    const totalInst = p.patientTotalInstallments || p.totalInstallments || 1;
+                    const dueBefore = p.previousDueBefore;
+                    const dueAfter = p.remainingDueAfter;
+
+                    return (
+                      <tr
+                        key={p.id}
+                        className="hover:bg-teal-50/50 transition-colors cursor-pointer"
+                        onClick={() => onSelectPatient && onSelectPatient(p.patientId)}
+                        title="Click anywhere to view patient profile"
+                      >
+                        <td className="py-3.5 px-4 whitespace-nowrap">
+                          <div className="font-bold text-teal-700 font-mono">{p.paymentId}</div>
+                          <span className="inline-block mt-0.5 text-[10px] font-bold px-1.5 py-0.2 rounded bg-teal-50 text-teal-800 border border-teal-200">
+                            Installment #{instNum} of {totalInst}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <div className="font-semibold text-slate-900">{p.patientName}</div>
+                          <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-0.5">
+                            <span className="font-bold text-teal-700">{p.patientCode}</span>
+                            {p.patientPhone && (
+                              <>
+                                <span>&bull;</span>
+                                <span className="inline-flex items-center gap-0.5">
+                                  <Phone className="w-2.5 h-2.5" />
+                                  {p.patientPhone}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-700 font-bold whitespace-nowrap">
+                          {p.visitCode}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-600 whitespace-nowrap">
+                          {p.paymentDate}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`px-2 py-0.5 rounded font-semibold border text-[11px] ${getMethodBadgeStyle(
+                                p.paymentMethod
+                              )}`}
+                            >
+                              {p.paymentMethod}
+                            </span>
+                            {p.transactionRef && (
+                              <span className="font-mono text-[11px] text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                                {p.transactionRef}
+                              </span>
+                            )}
+                          </div>
+                          {p.notes && (
+                            <div className="text-[10px] text-slate-500 truncate max-w-[180px] mt-0.5 italic">
+                              {p.notes}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 text-slate-800 font-medium whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200 text-xs">
+                            <Stethoscope className="w-3 h-3 text-teal-600" />
+                            <span>{p.receiverName || 'Clinic Staff'}</span>
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 text-right whitespace-nowrap text-[11px]">
+                          <div className="text-slate-600">
+                            Visit Bill: <strong>৳{visitTotal.toLocaleString()}</strong>
+                            {visitDisc > 0 && (
+                              <span className="text-emerald-700 ml-1">(-৳{visitDisc.toLocaleString()})</span>
+                            )}
+                          </div>
+                          {dueBefore !== undefined && dueAfter !== undefined ? (
+                            <div className="text-[10px] text-slate-600 mt-0.5">
+                              <span>Due Before: <strong className="text-slate-800 font-mono">৳{dueBefore.toLocaleString()}</strong></span>
+                              <span className="mx-1">&rarr;</span>
+                              <strong className={`font-mono ${dueAfter > 0 ? 'text-amber-800' : 'text-emerald-700'}`}>
+                                {dueAfter > 0 ? `৳${dueAfter.toLocaleString()} Due` : '৳0 Settled'}
+                              </strong>
+                            </div>
+                          ) : visitDue > 0 ? (
+                            <span className="text-amber-800 font-bold">
+                              Rem. Due: ৳{visitDue.toLocaleString()}
+                            </span>
+                          ) : (
+                            <span className="text-emerald-700 font-semibold inline-flex items-center gap-0.5">
+                              <CheckCircle2 className="w-3 h-3" /> Visit Cleared
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-extrabold text-emerald-700 text-sm whitespace-nowrap font-mono">
+                          +৳{parseFloat(p.amount).toLocaleString()}
+                        </td>
+                        <td className="py-3.5 px-4 text-center" onClick={(e) => e.stopPropagation()}>
+                          <div className="inline-flex items-center justify-center gap-1.5 whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => onSelectPatient && onSelectPatient(p.patientId)}
+                              className="px-2.5 py-1 text-xs font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded border border-teal-200 inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>View</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setUndoTargetPayment({
+                                  id: p.id,
+                                  paymentId: p.paymentId,
+                                  amount: p.amount,
+                                  paymentMethod: p.paymentMethod,
+                                  paymentDate: p.paymentDate,
+                                  visitCode: p.visitCode,
+                                  patientName: p.patientName,
+                                  receiverName: p.receiverName,
+                                  installmentNumber: instNum,
+                                  totalInstallments: totalInst,
+                                  currentDueBeforeUndo: visitDue,
+                                })
+                              }
+                              className="px-2 py-1 text-xs font-semibold text-slate-600 hover:text-rose-700 bg-slate-100 hover:bg-rose-50 rounded border border-slate-200 hover:border-rose-300 transition-colors cursor-pointer inline-flex items-center gap-1"
+                              title="Undo / Delete this mistaken payment installment"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              <span>Undo</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={9} className="py-10 text-center text-slate-400">
+                      <CreditCard className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+                      <p className="font-semibold text-slate-700">No payment records found.</p>
+                      {hasActiveFilters && (
+                        <button
+                          type="button"
+                          onClick={handleResetFilters}
+                          className="mt-3 px-3 py-1.5 text-xs font-semibold text-teal-700 bg-teal-50 hover:bg-teal-100 rounded-lg border border-teal-200 cursor-pointer inline-flex items-center gap-1"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>Clear All Filters</span>
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Popup Modal when Undoing a Mistaken Payment Installment */}
+      <UndoPaymentConfirmModal
+        isOpen={Boolean(undoTargetPayment)}
+        payment={undoTargetPayment}
+        isDeleting={deletingId !== null}
+        onCancel={() => setUndoTargetPayment(null)}
+        onConfirm={handleDeletePayment}
+      />
+    </div>
+  );
+};
