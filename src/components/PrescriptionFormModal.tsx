@@ -160,7 +160,8 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
   const [loadingProfile, setLoadingProfile] = useState(false);
 
   // Clinical Form Fields (English clinical labels)
-  const [visitId, setVisitId] = useState<number | ''>('');
+  const [visitId, setVisitId] = useState<number | 'auto' | ''>('auto');
+  const userChangedVisitRef = useRef(false);
   const [doctorId, setDoctorId] = useState<number>(user?.id || 0);
   const [prescriptionDate, setPrescriptionDate] = useState<string>(
     new Date().toISOString().split('T')[0]
@@ -170,6 +171,12 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
   const [diagnosis, setDiagnosis] = useState('');
   const [treatmentPlan, setTreatmentPlan] = useState('');
   const [followUpDate, setFollowUpDate] = useState('');
+
+  // Patient Past / Disease / Allergy History (synced back to centralized Patient Profile)
+  const [patientExistingDiseases, setPatientExistingDiseases] = useState('');
+  const [patientAllergies, setPatientAllergies] = useState('');
+  const [patientMedicalHistory, setPatientMedicalHistory] = useState('');
+  const [syncToPatientRecords, setSyncToPatientRecords] = useState<boolean>(true);
 
   // Dynamic Medicines + Smart Local Catalog Autocomplete
   const [medicines, setMedicines] = useState<PrescriptionMedicine[]>([emptyMedicine()]);
@@ -214,6 +221,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
     if (!isOpen) return;
 
     idempotencyKeyRef.current = `rx-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    userChangedVisitRef.current = false;
     setError(null);
     setActiveMedIdx(null);
     setMedResults([]);
@@ -275,7 +283,11 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
       setTreatmentPlanItems(editPlans);
       setAdvisedTests(editTests);
       setShowPlanCosts(editingPrescription.showPlanCosts !== false);
+      setSyncToPatientRecords(editingPrescription.syncToPatientRecords !== false);
       setShowOptionalSections(editPlans.length > 0 || editTests.length > 0);
+      setPatientExistingDiseases(editingPrescription.patientExistingDiseases || '');
+      setPatientAllergies(editingPrescription.patientAllergies || '');
+      setPatientMedicalHistory(editingPrescription.patientMedicalHistory || '');
       setCustomSections(
         (editingPrescription.customSections || []).map((s) => ({
           heading: s.heading || '',
@@ -286,7 +298,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
       setHeadingsNotice(null);
     } else {
       setSelectedPatientId(patientId || null);
-      setVisitId(defaultVisitId || '');
+      setVisitId(defaultVisitId || 'auto');
       setDoctorId(user?.id || 0);
       setPrescriptionDate(new Date().toISOString().split('T')[0]);
       setChiefComplaints('');
@@ -294,6 +306,10 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
       setDiagnosis('');
       setTreatmentPlan('');
       setFollowUpDate('');
+      setPatientExistingDiseases('');
+      setPatientAllergies('');
+      setPatientMedicalHistory('');
+      setSyncToPatientRecords(true);
       setOralHygieneInstructions('');
       setToothBrushingInstructions('');
       setMouthwashRecommendations('');
@@ -366,29 +382,61 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
       return;
     }
 
+    let cancelled = false;
+    userChangedVisitRef.current = false;
     setLoadingProfile(true);
     api
       .getPatient(selectedPatientId)
       .then((profile) => {
+        if (cancelled) return;
         setPatientProfile(profile);
-        if (!editingPrescription && profile.visits.length > 0) {
-          const targetVisit =
-            (defaultVisitId
+        setPatientExistingDiseases((prev) => prev || profile.existingDiseases || '');
+        setPatientAllergies((prev) => prev || profile.allergies || '');
+        setPatientMedicalHistory((prev) => prev || profile.medicalHistory || '');
+
+        if (!editingPrescription && !userChangedVisitRef.current) {
+          const explicitVisit =
+            defaultVisitId && profile.visits.length > 0
               ? profile.visits.find((v) => v.id === defaultVisitId)
-              : null) || profile.visits[0];
-          setVisitId(targetVisit.id);
-          setChiefComplaints((prev) => prev || targetVisit.complaints || '');
-          setDiagnosis((prev) => prev || targetVisit.diagnosis || '');
-          setFollowUpDate((prev) => prev || targetVisit.nextFollowUpDate || '');
+              : null;
+
+          if (explicitVisit) {
+            setVisitId(explicitVisit.id);
+            setChiefComplaints((prev) => prev || explicitVisit.complaints || '');
+            setDiagnosis((prev) => prev || explicitVisit.diagnosis || '');
+            setFollowUpDate((prev) => prev || explicitVisit.nextFollowUpDate || '');
+          } else {
+            // Default every new prescription to auto-create a new clinic visit (VST-#) for clean visit tracking
+            setVisitId('auto');
+          }
         }
       })
-      .catch((err) => setError(err.message || 'Failed to load patient details'))
-      .finally(() => setLoadingProfile(false));
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err.message || 'Failed to load patient details');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingProfile(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen, selectedPatientId]);
 
   if (!isOpen) return null;
 
-  const handleVisitChange = (newVisitId: number) => {
+  const handleVisitChange = (rawValue: string) => {
+    userChangedVisitRef.current = true;
+    if (!rawValue || rawValue === 'auto') {
+      setVisitId(editingPrescription ? '' : 'auto');
+      return;
+    }
+    const newVisitId = parseInt(rawValue, 10);
+    if (isNaN(newVisitId)) return;
     setVisitId(newVisitId);
     if (!editingPrescription && patientProfile) {
       const matched = patientProfile.visits.find((v) => v.id === newVisitId);
@@ -401,7 +449,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
   };
 
   const syncFromSelectedVisit = () => {
-    if (!patientProfile || !visitId) return;
+    if (!patientProfile || !visitId || visitId === 'auto') return;
     const matched = patientProfile.visits.find((v) => v.id === Number(visitId));
     if (matched) {
       setChiefComplaints(matched.complaints || '');
@@ -603,8 +651,17 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
   const handleSave = async (mode: 'draft' | 'preview' | 'finalize') => {
     setError(null);
 
-    if (!selectedPatientId || !visitId) {
-      setError('Please select a Patient and an Associated Clinic Visit.');
+    if (!selectedPatientId) {
+      setError('Please select a Patient first.');
+      return;
+    }
+
+    const effectiveVisitId = editingPrescription
+      ? visitId || editingPrescription.visitId
+      : visitId || defaultVisitId || 'auto';
+
+    if (editingPrescription && !effectiveVisitId) {
+      setError('Please select an Associated Clinic Visit.');
       return;
     }
 
@@ -701,7 +758,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
 
     const payload = {
       patientId: selectedPatientId,
-      visitId: Number(visitId),
+      visitId: effectiveVisitId === 'auto' ? 'auto' : Number(effectiveVisitId),
       doctorId: isSuper ? doctorId : user?.id,
       prescriptionDate,
       status: mode === 'finalize' ? 'Finalized' : 'Draft',
@@ -712,9 +769,13 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
       treatmentPlan,
       customSections: nonEmptyCustomSections,
       showPlanCosts,
+      syncToPatientRecords,
       treatmentPlanItems: nonEmptyPlans,
       advisedTests: nonEmptyTests,
       followUpDate,
+      patientExistingDiseases,
+      patientAllergies,
+      patientMedicalHistory,
       oralHygieneInstructions,
       toothBrushingInstructions,
       mouthwashRecommendations,
@@ -839,8 +900,9 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                       <button
                         type="button"
                         onClick={() => {
+                          userChangedVisitRef.current = false;
                           setSelectedPatientId(null);
-                          setVisitId('');
+                          setVisitId('auto');
                         }}
                         className="text-[11px] font-semibold text-teal-700 hover:underline cursor-pointer"
                       >
@@ -950,7 +1012,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                     <CalendarCheck className="w-4 h-4 text-teal-600" />
                     <span>Prescription &amp; Clinical Details</span>
                   </span>
-                  {visitId && patientProfile && (
+                  {visitId && visitId !== 'auto' && patientProfile && (
                     <button
                       type="button"
                       onClick={syncFromSelectedVisit}
@@ -998,24 +1060,81 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                     </label>
                     <select
                       required
-                      value={visitId}
-                      onChange={(e) => handleVisitChange(parseInt(e.target.value, 10))}
+                      value={visitId || (editingPrescription ? '' : 'auto')}
+                      onChange={(e) => handleVisitChange(e.target.value)}
                       className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-medium text-slate-900 focus:ring-2 focus:ring-teal-500"
                     >
-                      <option value="" disabled>
-                        Select patient visit...
-                      </option>
+                      {editingPrescription && (
+                        <option value="" disabled>
+                          Select patient visit...
+                        </option>
+                      )}
+                      {!editingPrescription && (
+                        <option value="auto">
+                          + Create New Clinic Visit Automatically (Auto VST-#)
+                        </option>
+                      )}
                       {patientProfile?.visits.map((v) => (
                         <option key={v.id} value={v.id}>
                           {v.visitId} &bull; {v.visitDate} &bull; {v.doctorName}
                         </option>
                       ))}
                     </select>
-                    {patientProfile && patientProfile.visits.length === 0 && (
-                      <p className="text-[11px] text-amber-700 mt-1">
-                        This patient has no visits yet. Create a clinic visit first.
+                    {(visitId === 'auto' || (!editingPrescription && !visitId)) && (
+                      <p className="text-[11px] text-emerald-700 font-medium mt-1">
+                        A new clinic visit (VST-#) will be created automatically on save for accurate visit &amp; billing tracking.
                       </p>
                     )}
+                  </div>
+                </div>
+
+                {/* Patient Past / Disease / Allergy History (Synced to Centralized Patient Profile) */}
+                <div className="p-3 rounded-xl bg-slate-50/90 border border-slate-200 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-bold text-slate-800 text-[11px] uppercase tracking-wider">
+                      Past History, Existing Diseases &amp; Drug Allergies
+                    </span>
+                    <span className="text-[10px] font-semibold text-teal-700">
+                      Automatically updates centralized Patient Medical History
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Existing Diseases
+                      </label>
+                      <input
+                        type="text"
+                        value={patientExistingDiseases}
+                        onChange={(e) => setPatientExistingDiseases(e.target.value)}
+                        placeholder="e.g. Diabetes, Hypertension, Cardiac"
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Known Drug Allergies
+                      </label>
+                      <input
+                        type="text"
+                        value={patientAllergies}
+                        onChange={(e) => setPatientAllergies(e.target.value)}
+                        placeholder="e.g. Penicillin, Sulfa, NSAIDs"
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-red-700 font-medium"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Past Medical History
+                      </label>
+                      <input
+                        type="text"
+                        value={patientMedicalHistory}
+                        onChange={(e) => setPatientMedicalHistory(e.target.value)}
+                        placeholder="Surgeries, medications, bleeding history..."
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -1942,34 +2061,48 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                         return sum + (Number.isFinite(n) && n >= 0 ? n : 0);
                       }, 0);
                       return (
-                        <div className="p-3 rounded-xl bg-teal-50/80 border border-teal-200 flex flex-wrap items-center justify-between gap-3">
-                          <label className="inline-flex items-center gap-2 font-semibold text-slate-800 cursor-pointer">
+                        <div className="p-3 rounded-xl bg-teal-50/80 border border-teal-200 space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <label className="inline-flex items-center gap-2 font-semibold text-slate-800 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={showPlanCosts}
+                                onChange={(e) => setShowPlanCosts(e.target.checked)}
+                                className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500"
+                              />
+                              <span>Show estimated costs (৳) on Prescription Preview &amp; PDF</span>
+                            </label>
+
+                            <div className="flex flex-wrap items-center gap-3 text-xs">
+                              <span className="text-slate-600">
+                                Treatments:{' '}
+                                <strong className="font-mono text-slate-900">
+                                  ৳{planSum.toLocaleString()}
+                                </strong>
+                              </span>
+                              <span className="text-slate-600">
+                                Tests:{' '}
+                                <strong className="font-mono text-slate-900">
+                                  ৳{testSum.toLocaleString()}
+                                </strong>
+                              </span>
+                              <span className="px-2.5 py-1 rounded-lg bg-teal-700 text-white font-bold font-mono">
+                                Est. Total: ৳{(planSum + testSum).toLocaleString()}
+                              </span>
+                            </div>
+                          </div>
+
+                          <label className="inline-flex items-center gap-2 font-semibold text-teal-900 cursor-pointer pt-1.5 border-t border-teal-200/70 w-full">
                             <input
                               type="checkbox"
-                              checked={showPlanCosts}
-                              onChange={(e) => setShowPlanCosts(e.target.checked)}
+                              checked={syncToPatientRecords}
+                              onChange={(e) => setSyncToPatientRecords(e.target.checked)}
                               className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500"
                             />
-                            <span>Show estimated costs (৳) on Prescription Preview &amp; PDF</span>
+                            <span>
+                              Sync Planned Treatments, Advised Tests, Follow-up &amp; Costs to Patient History &amp; Billing
+                            </span>
                           </label>
-
-                          <div className="flex flex-wrap items-center gap-3 text-xs">
-                            <span className="text-slate-600">
-                              Treatments:{' '}
-                              <strong className="font-mono text-slate-900">
-                                ৳{planSum.toLocaleString()}
-                              </strong>
-                            </span>
-                            <span className="text-slate-600">
-                              Tests:{' '}
-                              <strong className="font-mono text-slate-900">
-                                ৳{testSum.toLocaleString()}
-                              </strong>
-                            </span>
-                            <span className="px-2.5 py-1 rounded-lg bg-teal-700 text-white font-bold font-mono">
-                              Est. Total: ৳{(planSum + testSum).toLocaleString()}
-                            </span>
-                          </div>
                         </div>
                       );
                     })()}
@@ -2040,7 +2173,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              disabled={saving || !selectedPatientId || !visitId}
+              disabled={saving || !selectedPatientId || (Boolean(editingPrescription) && !visitId)}
               onClick={() => handleSave('draft')}
               className="px-4 py-2 text-xs font-bold rounded-xl border border-teal-300 bg-teal-50 hover:bg-teal-100 text-teal-900 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
@@ -2050,7 +2183,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
 
             <button
               type="button"
-              disabled={saving || !selectedPatientId || !visitId}
+              disabled={saving || !selectedPatientId || (Boolean(editingPrescription) && !visitId)}
               onClick={() => handleSave('preview')}
               className="px-4 py-2 text-xs font-bold rounded-xl bg-slate-800 hover:bg-slate-900 text-white flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
@@ -2060,7 +2193,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
 
             <button
               type="button"
-              disabled={saving || !selectedPatientId || !visitId}
+              disabled={saving || !selectedPatientId || (Boolean(editingPrescription) && !visitId)}
               onClick={() => handleSave('finalize')}
               className="px-4 py-2 text-xs font-bold rounded-xl bg-teal-600 hover:bg-teal-700 text-white shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
             >

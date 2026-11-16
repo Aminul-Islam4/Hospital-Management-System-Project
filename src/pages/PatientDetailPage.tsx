@@ -86,16 +86,13 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
   }, [prescriptionManagementEnabled, activeTab]);
 
   const requestCounterRef = React.useRef(0);
+  const lastLoadedPatientIdRef = React.useRef<number | null>(null);
 
   useEffect(() => {
-    loadPatient(true);
-  }, [patientId]);
-
-  useEffect(() => {
-    if (refreshKey !== undefined && refreshKey > 0) {
-      loadPatient(false);
-    }
-  }, [refreshKey]);
+    const isNewPatient = lastLoadedPatientIdRef.current !== patientId;
+    lastLoadedPatientIdRef.current = patientId;
+    loadPatient(isNewPatient);
+  }, [patientId, refreshKey]);
 
   const loadPatient = async (showSpinner = true) => {
     const reqId = ++requestCounterRef.current;
@@ -165,29 +162,56 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
     (v) => parseFloat(v.outstandingDue || '0') > 0.01
   );
 
-  const tabs = [
-    { id: 'overview', label: '1. Overview', icon: FileText },
-    {
-      id: 'visits',
-      label: `2. Visit History (${profile.visits.length})`,
-      icon: CalendarCheck,
-      badge: latestOutstandingDue > 0 ? `৳${latestOutstandingDue.toLocaleString()} Due` : undefined,
-    },
-    { id: 'doctors', label: `3. Doctor History (${profile.doctorHistory.length})`, icon: UserCheck },
-    { id: 'medical', label: '4. Disease & Medical History', icon: HeartPulse },
-    { id: 'treatments', label: `5. Treatment History (${profile.treatments.length})`, icon: Stethoscope },
-    { id: 'tests', label: `6. Test & X-ray History (${profile.diagnosticTests.length})`, icon: Radio },
+  const visitByIdMap = new Map<number, Visit>();
+  for (const v of profile.visits) {
+    visitByIdMap.set(v.id, v);
+  }
+
+  const visitsChronoOldestFirst = [...profile.visits].sort((a, b) => {
+    if (a.visitDate !== b.visitDate) return a.visitDate.localeCompare(b.visitDate);
+    return a.id - b.id;
+  });
+
+  const visitsWithClinicalRemarks = profile.visits.filter(
+    (v) =>
+      Boolean(v.notes?.trim()) ||
+      Boolean(v.complaints?.trim()) ||
+      Boolean(v.diagnosis?.trim()) ||
+      Boolean(v.nextFollowUpDate?.trim())
+  );
+
+  const rawTabs = [
+    { id: 'overview', label: 'Overview', icon: FileText },
+    ...(prescriptionManagementEnabled
+      ? [{ id: 'prescriptions', label: 'Prescription History', icon: FileText }]
+      : []),
     {
       id: 'payments',
-      label: `7. Payment History (${profile.payments.length})`,
+      label: `Payment History (${profile.payments.length})`,
       icon: CreditCard,
       badge: latestOutstandingDue > 0 ? `৳${latestOutstandingDue.toLocaleString()} Due` : undefined,
     },
-    { id: 'notes', label: `8. Notes & Follow-ups (${profile.appointments.length})`, icon: Clock },
-    ...(prescriptionManagementEnabled
-      ? [{ id: 'prescriptions', label: '9. Prescription History', icon: FileText }]
-      : []),
+    {
+      id: 'visits',
+      label: `Visit History (${profile.visits.length})`,
+      icon: CalendarCheck,
+      badge: latestOutstandingDue > 0 ? `৳${latestOutstandingDue.toLocaleString()} Due` : undefined,
+    },
+    { id: 'treatments', label: `Treatment History (${profile.treatments.length})`, icon: Stethoscope },
+    { id: 'tests', label: `Test & X-ray History (${profile.diagnosticTests.length})`, icon: Radio },
+    { id: 'medical', label: 'Disease & Medical History', icon: HeartPulse },
+    { id: 'doctors', label: `Doctor History (${profile.doctorHistory.length})`, icon: UserCheck },
+    {
+      id: 'notes',
+      label: `Notes & Follow-ups (${profile.appointments.length})`,
+      icon: Clock,
+    },
   ];
+
+  const tabs = rawTabs.map((t, idx) => ({
+    ...t,
+    label: `${idx + 1}. ${t.label}`,
+  }));
 
   // Outstanding Dues Tracker Component (Always shows latest account state)
   const renderDuesTracker = () => {
@@ -749,7 +773,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
           {prescriptionManagementEnabled && onOpenCreatePrescription && (
             <button
               type="button"
-              onClick={() => onOpenCreatePrescription(profile.id, latestVisit?.id)}
+              onClick={() => onOpenCreatePrescription(profile.id)}
               className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
             >
               <FileText className="w-4 h-4" />
@@ -1487,50 +1511,136 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
           </div>
         )}
 
-        {/* TAB 3: DOCTOR HISTORY */}
+        {/* DOCTOR HISTORY */}
         {activeTab === 'doctors' && (
           <div className="space-y-4 text-xs">
-            <h3 className="font-bold text-slate-900 text-sm">
-              Attending Doctor History for Patient {profile.patientId}
-            </h3>
-            <p className="text-slate-500">
-              Shows all doctors who have treated this patient across separate visits, maintaining complete centralized continuity of dental care.
-            </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {profile.doctorHistory.map((doc) => (
-                <div key={doc.id} className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Stethoscope className="w-5 h-5 text-teal-600" />
-                      <div>
-                        <div className="font-bold text-slate-900 text-sm">{doc.name}</div>
-                        <div className="text-slate-500">{doc.specialization}</div>
-                      </div>
-                    </div>
-                    <span className="px-2.5 py-1 rounded-full bg-teal-100 text-teal-800 font-extrabold text-xs">
-                      {doc.visitCount} Visit{doc.visitCount > 1 ? 's' : ''}
-                    </span>
-                  </div>
-                </div>
-              ))}
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-200">
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm">
+                  Attending Doctor History for Patient {profile.patientId} ({profile.doctorHistory.length})
+                </h3>
+                <p className="text-slate-500">
+                  Shows all doctors who have treated this patient across separate visits, with dates, diagnoses, and procedures performed.
+                </p>
+              </div>
             </div>
+
+            {profile.doctorHistory.length === 0 ? (
+              <div className="py-10 text-center text-slate-400 border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                <UserCheck className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+                <p className="font-semibold text-slate-600">No attending doctor visits recorded yet.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {profile.doctorHistory.map((doc) => {
+                  const docVisits = profile.visits.filter((v) => v.doctorId === doc.id);
+                  const docTreatments = profile.treatments.filter((t) => t.doctorId === doc.id);
+                  const docTests = profile.diagnosticTests.filter((t) => t.doctorId === doc.id);
+                  const sortedDates = docVisits.map((v) => v.visitDate).sort();
+                  const firstVisitDate = sortedDates[0] || '-';
+                  const lastVisitDate = sortedDates[sortedDates.length - 1] || '-';
+
+                  return (
+                    <div
+                      key={doc.id}
+                      className="p-4 rounded-xl border border-slate-200 bg-slate-50/80 space-y-3"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-9 h-9 rounded-xl bg-teal-100 text-teal-700 border border-teal-200 flex items-center justify-center shrink-0">
+                            <Stethoscope className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="font-bold text-slate-900 text-sm">{doc.name}</div>
+                            <div className="text-teal-700 font-medium">{doc.specialization}</div>
+                          </div>
+                        </div>
+                        <span className="px-2.5 py-1 rounded-full bg-teal-100 text-teal-800 font-extrabold text-xs border border-teal-200">
+                          {doc.visitCount} Visit{doc.visitCount > 1 ? 's' : ''}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-white p-2.5 rounded-lg border border-slate-200 text-[11px]">
+                        <div>
+                          <span className="text-slate-400 block">First Visit</span>
+                          <strong className="text-slate-800">{firstVisitDate}</strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block">Last Visit</span>
+                          <strong className="text-slate-800">{lastVisitDate}</strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block">Treatments</span>
+                          <strong className="text-teal-800">{docTreatments.length}</strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 block">Tests / X-Rays</span>
+                          <strong className="text-cyan-800">{docTests.length}</strong>
+                        </div>
+                      </div>
+
+                      {docVisits.length > 0 && (
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                            Visit Breakdown
+                          </span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {docVisits.map((dv) => (
+                              <span
+                                key={dv.id}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white border border-slate-200 text-[11px] text-slate-700"
+                              >
+                                <strong className="font-mono text-teal-800">{dv.visitId}</strong>
+                                <span className="text-slate-400">&bull;</span>
+                                <span>{dv.visitDate}</span>
+                                {dv.diagnosis && (
+                                  <span className="text-slate-500 truncate max-w-[140px]">
+                                    ({dv.diagnosis})
+                                  </span>
+                                )}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
-        {/* TAB 4: DISEASE & MEDICAL HISTORY */}
+        {/* DISEASE & MEDICAL HISTORY */}
         {activeTab === 'medical' && (
           <div className="space-y-4 text-xs">
-            <h3 className="font-bold text-slate-900 text-sm">
-              Permanent Medical &amp; Dental History
-            </h3>
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-200">
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm">
+                  Permanent Medical &amp; Dental History
+                </h3>
+                <p className="text-slate-500">
+                  Registered: <strong className="text-slate-700">{profile.registrationDate}</strong> &bull; Last Visit:{' '}
+                  <strong className="text-slate-700">{profile.stats.lastVisitDate || 'No visits yet'}</strong>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => onOpenEditPatient(profile)}
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
+              >
+                <Edit2 className="w-3.5 h-3.5" />
+                <span>Update Medical Profile</span>
+              </button>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="p-4 bg-red-50/70 border border-red-200 rounded-xl space-y-2">
                 <span className="font-bold text-red-900 flex items-center gap-1.5">
                   <AlertTriangle className="w-4 h-4 text-red-600" />
                   Known Drug &amp; Material Allergies
                 </span>
-                <p className="text-red-950 font-semibold text-sm">
+                <p className="text-red-950 font-semibold text-sm whitespace-pre-wrap">
                   {profile.allergies || 'No known allergies reported.'}
                 </p>
               </div>
@@ -1540,7 +1650,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                   <HeartPulse className="w-4 h-4 text-amber-600" />
                   Existing Medical Conditions &amp; Diseases
                 </span>
-                <p className="text-amber-950 font-semibold text-sm">
+                <p className="text-amber-950 font-semibold text-sm whitespace-pre-wrap">
                   {profile.existingDiseases || 'No systemic diseases noted.'}
                 </p>
               </div>
@@ -1551,63 +1661,134 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                   {profile.medicalHistory || 'No additional history recorded.'}
                 </p>
               </div>
+
+              {profile.notes && (
+                <div className="p-4 bg-teal-50/40 border border-teal-200 rounded-xl space-y-1.5 col-span-1 md:col-span-2">
+                  <span className="font-bold text-teal-900 block">Patient Profile Remarks</span>
+                  <p className="text-slate-700 leading-relaxed whitespace-pre-wrap">{profile.notes}</p>
+                </div>
+              )}
             </div>
           </div>
         )}
 
-        {/* TAB 5: TREATMENT HISTORY */}
+        {/* TREATMENT HISTORY */}
         {activeTab === 'treatments' && (
           <div className="space-y-4 text-xs">
-            <div className="flex items-center justify-between">
-              <h3 className="font-bold text-slate-900 text-sm">
-                Consolidated Treatments History ({profile.treatments.length})
-              </h3>
-              <span className="font-bold text-slate-900 text-xs">
-                Total Treatment Expenses: ৳{profile.financialSummary.totalTreatmentExpenses.toLocaleString()}
-              </span>
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-200">
+              <div>
+                <h3 className="font-bold text-slate-900 text-sm">
+                  Consolidated Treatments History ({profile.treatments.length})
+                </h3>
+                <p className="text-slate-500">
+                  Complete procedure log across all visits with tooth numbers, dates, attending doctors, and status.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 border border-slate-200 font-semibold">
+                  Completed: {profile.treatments.filter((t) => t.status === 'Completed').length} &bull; Planned:{' '}
+                  {profile.treatments.filter((t) => t.status !== 'Completed').length}
+                </span>
+                <span className="px-3 py-1 rounded-lg bg-teal-50 text-teal-900 border border-teal-200 font-extrabold font-mono">
+                  Total Treatment Expenses: ৳{profile.financialSummary.totalTreatmentExpenses.toLocaleString()}
+                </span>
+              </div>
             </div>
 
-            <div className="border border-slate-200 rounded-xl overflow-hidden">
-              <table className="w-full text-left">
-                <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
-                  <tr>
-                    <th className="py-3 px-4">Date</th>
-                    <th className="py-3 px-4">Treatment</th>
-                    <th className="py-3 px-4">Tooth #</th>
-                    <th className="py-3 px-4">Doctor</th>
-                    <th className="py-3 px-4">Description</th>
-                    <th className="py-3 px-4 text-right">Cost (৳)</th>
-                    <th className="py-3 px-4 text-center">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {profile.treatments.map((t) => (
-                    <tr key={t.id} className="hover:bg-slate-50/80">
-                      <td className="py-3 px-4 text-slate-600">{t.treatmentDate}</td>
-                      <td className="py-3 px-4 font-bold text-slate-900">{t.treatmentName}</td>
-                      <td className="py-3 px-4 text-slate-700">{t.toothNumber || 'General'}</td>
-                      <td className="py-3 px-4 text-teal-800 font-medium">{t.doctorName}</td>
-                      <td className="py-3 px-4 text-slate-500 max-w-xs truncate">{t.description || '-'}</td>
-                      <td className="py-3 px-4 text-right font-bold text-slate-900">
-                        ৳{parseFloat(t.cost).toLocaleString()}
-                      </td>
-                      <td className="py-3 px-4 text-center">
-                        <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 font-semibold">
-                          {t.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {profile.treatments.length === 0 ? (
+              <div className="py-10 text-center text-slate-400 border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                <Stethoscope className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+                <p className="font-semibold text-slate-600">No dental treatments recorded for this patient yet.</p>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Treatments added in visits or synced from prescriptions will appear here automatically.
+                </p>
+              </div>
+            ) : (
+              <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                      <tr>
+                        <th className="py-3 px-4">Date</th>
+                        <th className="py-3 px-4">Visit</th>
+                        <th className="py-3 px-4">Treatment</th>
+                        <th className="py-3 px-4">Tooth #</th>
+                        <th className="py-3 px-4">Doctor</th>
+                        <th className="py-3 px-4">Description &amp; Notes</th>
+                        <th className="py-3 px-4 text-right">Cost (৳)</th>
+                        <th className="py-3 px-4 text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {profile.treatments.map((t) => {
+                        const linkedVisit = visitByIdMap.get(t.visitId);
+                        const isPlanned = t.status === 'Planned';
+                        return (
+                          <tr key={t.id} className="hover:bg-slate-50/80">
+                            <td className="py-3 px-4 text-slate-600 whitespace-nowrap font-medium">
+                              {t.treatmentDate}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className="font-mono font-bold text-teal-800 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200 text-[11px]">
+                                {linkedVisit?.visitId || `Visit #${t.visitId}`}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 font-bold text-slate-900">{t.treatmentName}</td>
+                            <td className="py-3 px-4 text-slate-700 whitespace-nowrap">
+                              {t.toothNumber ? (
+                                <span className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 font-mono text-[11px] font-semibold">
+                                  #{t.toothNumber}
+                                </span>
+                              ) : (
+                                'General'
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-teal-800 font-medium whitespace-nowrap">
+                              {t.doctorName}
+                            </td>
+                            <td className="py-3 px-4 text-slate-500 max-w-xs">
+                              {t.description || t.notes || '-'}
+                            </td>
+                            <td className="py-3 px-4 text-right font-bold text-slate-900 font-mono whitespace-nowrap">
+                              ৳{parseFloat(t.cost || '0').toLocaleString()}
+                            </td>
+                            <td className="py-3 px-4 text-center whitespace-nowrap">
+                              <span
+                                className={`px-2 py-0.5 rounded border font-semibold ${
+                                  isPlanned
+                                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                    : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                }`}
+                              >
+                                {t.status}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot className="bg-teal-50/60 border-t border-teal-200 font-bold text-slate-900">
+                      <tr>
+                        <td colSpan={6} className="py-2.5 px-4 text-right text-teal-900">
+                          Total ({profile.treatments.length} Treatment{profile.treatments.length === 1 ? '' : 's'}):
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-extrabold font-mono text-teal-900">
+                          ৳{profile.financialSummary.totalTreatmentExpenses.toLocaleString()}
+                        </td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* TAB 6: DIAGNOSTIC TESTS & X-RAYS (MANDATORY MODULE) */}
+        {/* DIAGNOSTIC TESTS & X-RAYS */}
         {activeTab === 'tests' && (
           <div className="space-y-4 text-xs">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-200">
               <div>
                 <h3 className="font-bold text-slate-900 text-sm">
                   Diagnostic Tests &amp; Radiograph History ({profile.diagnosticTests.length})
@@ -1616,67 +1797,116 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                   Separate tracking of X-rays, OPG, IOPA, and CBCT expenses contributing to visit financials.
                 </p>
               </div>
-              <span className="font-bold text-cyan-800 text-xs">
+              <span className="px-3 py-1 rounded-lg bg-cyan-50 text-cyan-900 border border-cyan-200 font-extrabold font-mono">
                 Total Test Charges: ৳{profile.financialSummary.totalTestExpenses.toLocaleString()}
               </span>
             </div>
 
-            <div className="border border-slate-200 rounded-xl overflow-hidden">
-              <table className="w-full text-left">
-                <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
-                  <tr>
-                    <th className="py-3 px-4">Date</th>
-                    <th className="py-3 px-4">Investigation Name</th>
-                    <th className="py-3 px-4">Category</th>
-                    <th className="py-3 px-4">Referring Doctor</th>
-                    <th className="py-3 px-4">Findings &amp; Notes</th>
-                    <th className="py-3 px-4 text-right">Cost (৳)</th>
-                    <th className="py-3 px-4 text-center">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {profile.diagnosticTests.map((t) => (
-                    <tr key={t.id} className="hover:bg-slate-50/80">
-                      <td className="py-3 px-4 text-slate-600">{t.testDate}</td>
-                      <td className="py-3 px-4 font-bold text-slate-900">{t.testName}</td>
-                      <td className="py-3 px-4">
-                        <span className="px-2 py-0.5 rounded bg-cyan-50 text-cyan-800 font-bold border border-cyan-200">
-                          {t.category}
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-slate-800 font-medium">{t.doctorName}</td>
-                      <td className="py-3 px-4 text-slate-500 max-w-xs truncate">{t.description || '-'}</td>
-                      <td className="py-3 px-4 text-right font-bold text-slate-900">
-                        ৳{parseFloat(t.cost).toLocaleString()}
-                      </td>
-                      <td className="py-3 px-4 text-center">
-                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-800 font-medium border border-slate-200">
-                          {t.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {profile.diagnosticTests.length === 0 ? (
+              <div className="py-10 text-center text-slate-400 border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                <Radio className="w-8 h-8 mx-auto text-slate-300 mb-2" />
+                <p className="font-semibold text-slate-600">No diagnostic tests or X-rays recorded yet.</p>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Advised tests from prescriptions or tests added inside visits will appear here automatically.
+                </p>
+              </div>
+            ) : (
+              <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                      <tr>
+                        <th className="py-3 px-4">Date</th>
+                        <th className="py-3 px-4">Visit</th>
+                        <th className="py-3 px-4">Investigation Name</th>
+                        <th className="py-3 px-4">Category</th>
+                        <th className="py-3 px-4">Referring Doctor</th>
+                        <th className="py-3 px-4">Findings &amp; Notes</th>
+                        <th className="py-3 px-4 text-right">Cost (৳)</th>
+                        <th className="py-3 px-4 text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {profile.diagnosticTests.map((t) => {
+                        const linkedVisit = visitByIdMap.get(t.visitId);
+                        const isRequested = t.status === 'Requested';
+                        return (
+                          <tr key={t.id} className="hover:bg-slate-50/80">
+                            <td className="py-3 px-4 text-slate-600 whitespace-nowrap font-medium">
+                              {t.testDate}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className="font-mono font-bold text-cyan-800 bg-cyan-50 px-1.5 py-0.5 rounded border border-cyan-200 text-[11px]">
+                                {linkedVisit?.visitId || `Visit #${t.visitId}`}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 font-bold text-slate-900">{t.testName}</td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className="px-2 py-0.5 rounded bg-cyan-50 text-cyan-800 font-bold border border-cyan-200">
+                                {t.category}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-slate-800 font-medium whitespace-nowrap">
+                              {t.doctorName}
+                            </td>
+                            <td className="py-3 px-4 text-slate-500 max-w-xs">
+                              {t.description || t.notes || '-'}
+                            </td>
+                            <td className="py-3 px-4 text-right font-bold text-slate-900 font-mono whitespace-nowrap">
+                              ৳{parseFloat(t.cost || '0').toLocaleString()}
+                            </td>
+                            <td className="py-3 px-4 text-center whitespace-nowrap">
+                              <span
+                                className={`px-2 py-0.5 rounded border font-semibold ${
+                                  isRequested
+                                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                    : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                }`}
+                              >
+                                {t.status}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot className="bg-cyan-50/60 border-t border-cyan-200 font-bold text-slate-900">
+                      <tr>
+                        <td colSpan={6} className="py-2.5 px-4 text-right text-cyan-900">
+                          Total ({profile.diagnosticTests.length} Investigation{profile.diagnosticTests.length === 1 ? '' : 's'}):
+                        </td>
+                        <td className="py-2.5 px-4 text-right font-extrabold font-mono text-cyan-900">
+                          ৳{profile.financialSummary.totalTestExpenses.toLocaleString()}
+                        </td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* TAB 7: PAYMENT HISTORY */}
+        {/* PAYMENT HISTORY */}
         {activeTab === 'payments' && (
           <div className="space-y-6 text-xs">
-            {/* 1. Complete Payment & Installment History Ledger */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <h3 className="font-bold text-slate-900 text-sm">
-                  Complete Chronological Payment &amp; Dues History Ledger ({profile.payments.length})
-                </h3>
-                <p className="text-slate-500">
-                  Chronological installment receipts, balance due before payment, amount paid, and remaining balance after each transaction.
-                </p>
-              </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                {latestVisit && latestOutstandingDue > 0 && (
+            {/* Account-Wide Financial Summary Strip */}
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-800 to-teal-950 text-white space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-teal-300 block">
+                    Complete Account &amp; Carried-Due Statement
+                  </span>
+                  <h3 className="font-extrabold text-white text-base">
+                    Payment History &amp; Multi-Visit Running Balance Breakdown
+                  </h3>
+                  <p className="text-[11px] text-slate-300 mt-0.5">
+                    Tracks previous carried-forward dues, new visit treatments/tests/charges, discounts, and installment payments chronologically.
+                  </p>
+                </div>
+
+                {latestVisit && latestOutstandingDue > 0 ? (
                   <button
                     type="button"
                     onClick={() =>
@@ -1687,16 +1917,310 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                         patientCode: profile.patientId,
                       })
                     }
-                    className="px-3.5 py-1.5 text-xs font-bold rounded-lg bg-teal-600 hover:bg-teal-700 text-white transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                    className="px-4 py-2 text-xs font-bold rounded-xl bg-amber-500 hover:bg-amber-600 text-white transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
                   >
-                    <CreditCard className="w-3.5 h-3.5" />
+                    <CreditCard className="w-4 h-4" />
                     <span>+ Record Payment (৳{latestOutstandingDue.toLocaleString()} Due)</span>
                   </button>
+                ) : (
+                  <span className="px-3 py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 font-bold inline-flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Account Settled (৳0 Due)</span>
+                  </span>
                 )}
-                <span className="font-bold text-emerald-800 text-xs bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
-                  Total Received: ৳{profile.financialSummary.totalAmountPaid.toLocaleString()}
-                </span>
               </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 pt-2 border-t border-white/10">
+                <div className="bg-white/10 rounded-xl px-3 py-2 border border-white/10">
+                  <span className="text-[10px] text-slate-300 uppercase block">Treatments</span>
+                  <strong className="text-sm font-extrabold font-mono text-white">
+                    ৳{profile.financialSummary.totalTreatmentExpenses.toLocaleString()}
+                  </strong>
+                </div>
+                <div className="bg-white/10 rounded-xl px-3 py-2 border border-white/10">
+                  <span className="text-[10px] text-slate-300 uppercase block">Tests / X-Rays</span>
+                  <strong className="text-sm font-extrabold font-mono text-white">
+                    ৳{profile.financialSummary.totalTestExpenses.toLocaleString()}
+                  </strong>
+                </div>
+                <div className="bg-white/10 rounded-xl px-3 py-2 border border-white/10">
+                  <span className="text-[10px] text-slate-300 uppercase block">Extra / Discounts</span>
+                  <strong className="text-sm font-extrabold font-mono text-teal-200">
+                    +৳{profile.financialSummary.totalAdditionalCharges.toLocaleString()} / -৳
+                    {profile.financialSummary.totalDiscounts.toLocaleString()}
+                  </strong>
+                </div>
+                <div className="bg-white/10 rounded-xl px-3 py-2 border border-white/10">
+                  <span className="text-[10px] text-slate-300 uppercase block">Total Net Bill</span>
+                  <strong className="text-sm font-black font-mono text-white">
+                    ৳{profile.financialSummary.totalExpenses.toLocaleString()}
+                  </strong>
+                </div>
+                <div className="bg-emerald-500/20 rounded-xl px-3 py-2 border border-emerald-400/30">
+                  <span className="text-[10px] text-emerald-200 uppercase block">
+                    Total Paid ({profile.payments.length} inst.)
+                  </span>
+                  <strong className="text-sm font-black font-mono text-emerald-200">
+                    ৳{profile.financialSummary.totalAmountPaid.toLocaleString()}
+                  </strong>
+                </div>
+                <div
+                  className={`rounded-xl px-3 py-2 border ${
+                    latestOutstandingDue > 0
+                      ? 'bg-amber-500/25 border-amber-400/40'
+                      : 'bg-emerald-500/20 border-emerald-400/30'
+                  }`}
+                >
+                  <span className="text-[10px] text-amber-100 uppercase block">Current Balance Due</span>
+                  <strong className="text-sm font-black font-mono text-white">
+                    ৳{latestOutstandingDue.toLocaleString()}
+                  </strong>
+                </div>
+              </div>
+            </div>
+
+            {/* 1. Chronological Multi-Visit Running Balance Breakdown (Oldest Visit #1 -> Latest Visit) */}
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                    <Calculator className="w-4 h-4 text-teal-600" />
+                    <span>
+                      Chronological Multi-Visit Billing &amp; Carried-Due Breakdown ({visitsChronoOldestFirst.length} Visit
+                      {visitsChronoOldestFirst.length === 1 ? '' : 's'})
+                    </span>
+                  </h4>
+                  <p className="text-slate-500">
+                    Follows Visit #1 &rarr; Latest Visit chronologically: Previous Carried Due + New Visit Bill &minus; Visit Payments = Balance Carried Forward / Active Due.
+                  </p>
+                </div>
+              </div>
+
+              {visitsChronoOldestFirst.length === 0 ? (
+                <div className="py-8 text-center text-slate-400 border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                  No clinic visits recorded yet for billing breakdown.
+                </div>
+              ) : (
+                <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
+                        <tr>
+                          <th className="py-3 px-3.5">Visit &amp; Date</th>
+                          <th className="py-3 px-3.5">New Treatments, Tests &amp; Charges Added</th>
+                          <th className="py-3 px-3.5 text-right">Prev. Carried Due</th>
+                          <th className="py-3 px-3.5 text-right">Visit Net Bill</th>
+                          <th className="py-3 px-3.5 text-right">Total Payable</th>
+                          <th className="py-3 px-3.5 text-right">Paid in Visit (with Dates)</th>
+                          <th className="py-3 px-3.5 text-right">Balance After Visit</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {visitsChronoOldestFirst.map((v, idx) => {
+                          const vTreatments =
+                            v.treatments || profile.treatments.filter((t) => t.visitId === v.id);
+                          const vTests =
+                            v.diagnosticTests ||
+                            profile.diagnosticTests.filter((t) => t.visitId === v.id);
+                          const vPayments =
+                            v.payments || profile.payments.filter((p) => p.visitId === v.id);
+                          const addChg = parseFloat(v.additionalCharges || '0');
+                          const disc = parseFloat(v.discount || '0');
+                          const netBill = parseFloat(v.totalCost || '0');
+                          const paid = parseFloat(v.amountPaid || '0');
+                          const prevCarried = v.previousCarriedDue ?? 0;
+                          const cumPayable =
+                            v.cumulativePayable !== undefined ? v.cumulativePayable : prevCarried + netBill;
+                          const balAfter =
+                            v.balanceAfterVisit !== undefined
+                              ? v.balanceAfterVisit
+                              : Math.max(0, cumPayable - paid);
+                          const isLatest =
+                            v.isLatestVisit !== undefined
+                              ? v.isLatestVisit
+                              : idx === visitsChronoOldestFirst.length - 1;
+
+                          return (
+                            <tr
+                              key={v.id}
+                              className={isLatest ? 'bg-teal-50/35 hover:bg-teal-50/60' : 'hover:bg-slate-50/80'}
+                            >
+                              <td className="py-3 px-3.5 whitespace-nowrap align-top">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-extrabold font-mono text-teal-800 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                                    {v.visitId}
+                                  </span>
+                                  <span className="text-[10px] font-bold text-slate-500">
+                                    #{idx + 1}
+                                  </span>
+                                  {isLatest && (
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-700 text-white">
+                                      Latest
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] font-medium text-slate-700 mt-1">
+                                  {v.visitDate}
+                                  {v.visitTime ? ` • ${v.visitTime}` : ''}
+                                </div>
+                                <div className="text-[11px] text-teal-700 font-medium">
+                                  {v.doctorName}
+                                </div>
+                              </td>
+
+                              <td className="py-3 px-3.5 align-top max-w-xs space-y-1">
+                                {vTreatments.length === 0 &&
+                                vTests.length === 0 &&
+                                addChg === 0 &&
+                                disc === 0 ? (
+                                  <span className="text-slate-400 italic">
+                                    Consultation / Follow-up (No new charges)
+                                  </span>
+                                ) : (
+                                  <div className="space-y-0.5 text-[11px]">
+                                    {vTreatments.map((t) => (
+                                      <div key={t.id} className="text-slate-800 flex items-center justify-between gap-2">
+                                        <span className="truncate">
+                                          • {t.treatmentName}
+                                          {t.toothNumber ? ` (#${t.toothNumber})` : ''}
+                                        </span>
+                                        <span className="font-mono font-semibold shrink-0">
+                                          ৳{parseFloat(t.cost || '0').toLocaleString()}
+                                        </span>
+                                      </div>
+                                    ))}
+                                    {vTests.map((t) => (
+                                      <div key={t.id} className="text-cyan-900 flex items-center justify-between gap-2">
+                                        <span className="truncate">• {t.testName} ({t.category})</span>
+                                        <span className="font-mono font-semibold shrink-0">
+                                          ৳{parseFloat(t.cost || '0').toLocaleString()}
+                                        </span>
+                                      </div>
+                                    ))}
+                                    {addChg > 0 && (
+                                      <div className="text-slate-600 flex items-center justify-between gap-2">
+                                        <span>• Additional Charges</span>
+                                        <span className="font-mono font-semibold">
+                                          +৳{addChg.toLocaleString()}
+                                        </span>
+                                      </div>
+                                    )}
+                                    {disc > 0 && (
+                                      <div className="text-emerald-700 flex items-center justify-between gap-2 font-semibold">
+                                        <span>• Discount / Concession</span>
+                                        <span className="font-mono">-৳{disc.toLocaleString()}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </td>
+
+                              <td className="py-3 px-3.5 text-right font-mono align-top whitespace-nowrap">
+                                <span
+                                  className={
+                                    prevCarried > 0 ? 'font-bold text-amber-800' : 'text-slate-400'
+                                  }
+                                >
+                                  ৳{prevCarried.toLocaleString()}
+                                </span>
+                              </td>
+
+                              <td className="py-3 px-3.5 text-right font-mono font-bold text-slate-900 align-top whitespace-nowrap">
+                                ৳{netBill.toLocaleString()}
+                              </td>
+
+                              <td className="py-3 px-3.5 text-right font-mono font-extrabold text-slate-900 align-top whitespace-nowrap">
+                                ৳{cumPayable.toLocaleString()}
+                              </td>
+
+                              <td className="py-3 px-3.5 text-right align-top">
+                                <div className="font-mono font-extrabold text-emerald-700 whitespace-nowrap">
+                                  ৳{paid.toLocaleString()}
+                                </div>
+                                {vPayments.length > 0 ? (
+                                  <div className="mt-1 space-y-0.5 text-[10px] text-slate-500">
+                                    {vPayments.map((vp) => (
+                                      <div key={vp.id} className="whitespace-nowrap">
+                                        {vp.paymentDate}:{' '}
+                                        <strong className="font-mono text-emerald-700">
+                                          +৳{parseFloat(vp.amount).toLocaleString()}
+                                        </strong>{' '}
+                                        ({vp.paymentMethod})
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="text-[10px] text-slate-400 italic mt-0.5">
+                                    No payment on visit
+                                  </div>
+                                )}
+                              </td>
+
+                              <td className="py-3 px-3.5 text-right align-top whitespace-nowrap">
+                                {balAfter > 0 ? (
+                                  <span
+                                    className={`inline-block font-mono font-extrabold px-2 py-0.5 rounded border ${
+                                      isLatest
+                                        ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                        : 'bg-amber-50 text-amber-800 border-amber-200'
+                                    }`}
+                                  >
+                                    ৳{balAfter.toLocaleString()}{' '}
+                                    {isLatest ? 'Active Due' : 'Carried Fwd'}
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-0.5 font-mono font-bold px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                    <CheckCircle2 className="w-3 h-3" /> ৳0 Cleared
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot className="bg-slate-100/90 border-t-2 border-slate-300 font-extrabold text-slate-900">
+                        <tr>
+                          <td colSpan={3} className="py-3 px-3.5 text-right text-slate-700">
+                            Account Totals Across All Visits:
+                          </td>
+                          <td className="py-3 px-3.5 text-right font-mono">
+                            ৳{profile.financialSummary.totalExpenses.toLocaleString()}
+                          </td>
+                          <td className="py-3 px-3.5 text-right font-mono text-slate-600">
+                            Net Bill
+                          </td>
+                          <td className="py-3 px-3.5 text-right font-mono text-emerald-700">
+                            ৳{profile.financialSummary.totalAmountPaid.toLocaleString()}
+                          </td>
+                          <td
+                            className={`py-3 px-3.5 text-right font-mono ${
+                              latestOutstandingDue > 0 ? 'text-amber-800' : 'text-emerald-700'
+                            }`}
+                          >
+                            ৳{latestOutstandingDue.toLocaleString()}{' '}
+                            {latestOutstandingDue > 0 ? 'Due' : 'Settled'}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 2. Complete Payment & Installment History Ledger */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+              <div>
+                <h4 className="font-bold text-slate-900 text-sm">
+                  Installment Payment Receipts Ledger ({profile.payments.length})
+                </h4>
+                <p className="text-slate-500">
+                  Chronological installment receipts showing payment date, covered procedures, balance due before payment, amount paid, and remaining balance after each transaction.
+                </p>
+              </div>
+              <span className="font-bold text-emerald-800 text-xs bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
+                Total Received: ৳{profile.financialSummary.totalAmountPaid.toLocaleString()}
+              </span>
             </div>
 
             <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs">
@@ -1705,14 +2229,14 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                   <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
                     <tr>
                       <th className="py-3 px-4">Receipt &amp; Installment</th>
-                      <th className="py-3 px-4">Date</th>
+                      <th className="py-3 px-4">Payment Date</th>
                       <th className="py-3 px-4">Visit &amp; Covered Procedures</th>
                       <th className="py-3 px-4">Method &amp; Ref</th>
                       <th className="py-3 px-4">Received By</th>
                       <th className="py-3 px-4 text-right">Due Before</th>
                       <th className="py-3 px-4 text-right">Paid Now (৳)</th>
                       <th className="py-3 px-4 text-right">Balance After Payment</th>
-                      <th className="py-3 px-4 text-center">Undo Mistaken Entry</th>
+                      <th className="py-3 px-4 text-center">Undo</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1724,16 +2248,22 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                       </tr>
                     ) : (
                       profile.payments.map((p) => {
-                        const matchVisit = profile.visits.find((v) => v.id === p.visitId);
+                        const matchVisit = visitByIdMap.get(p.visitId);
                         const vTreatments =
                           matchVisit?.treatments || profile.treatments.filter((t) => t.visitId === p.visitId);
                         const vTests =
                           matchVisit?.diagnosticTests ||
                           profile.diagnosticTests.filter((t) => t.visitId === p.visitId);
                         const instIndex = p.patientInstallmentNumber || p.installmentNumber || 1;
-                        const totalVisitInst = p.patientTotalInstallments || p.totalInstallments || 1;
+                        const totalPatientInst = p.patientTotalInstallments || profile.payments.length;
+                        const visitInstIdx = p.installmentNumber || 1;
+                        const visitInstTotal = p.totalInstallments || 1;
                         const visitBill = parseFloat(matchVisit?.totalCost || p.visitTotalCost || '0');
                         const visitDisc = parseFloat(matchVisit?.discount || p.visitDiscount || '0');
+                        const accountPaidSoFar =
+                          p.patientCumulativePaidAfter !== undefined
+                            ? p.patientCumulativePaidAfter
+                            : p.cumulativePaidAfter;
 
                         return (
                           <tr key={p.id} className="hover:bg-slate-50/80">
@@ -1741,27 +2271,42 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                               <div className="font-bold text-teal-700 font-mono">{p.paymentId}</div>
                               <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200">
-                                  Installment #{instIndex} of {totalVisitInst}
+                                  Receipt #{instIndex} of {totalPatientInst}
                                 </span>
+                                {visitInstTotal > 1 && (
+                                  <span className="text-[10px] font-semibold text-slate-500">
+                                    (Visit {visitInstIdx}/{visitInstTotal})
+                                  </span>
+                                )}
                               </div>
                             </td>
-                            <td className="py-3 px-4 text-slate-600 whitespace-nowrap font-medium">
-                              {p.paymentDate}
+                            <td className="py-3 px-4 text-slate-700 whitespace-nowrap font-semibold">
+                              <div>{p.paymentDate}</div>
+                              {matchVisit?.visitDate && matchVisit.visitDate !== p.paymentDate && (
+                                <div className="text-[10px] font-normal text-slate-400">
+                                  Visit: {matchVisit.visitDate}
+                                </div>
+                              )}
                             </td>
                             <td className="py-3 px-4 max-w-xs">
-                              <div className="flex items-center gap-1.5 mb-1">
+                              <div className="flex items-center gap-1.5 mb-1 flex-wrap">
                                 <span className="font-bold text-slate-800 font-mono text-[11px] bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
                                   {p.visitCode || matchVisit?.visitId || `Visit #${p.visitId}`}
                                 </span>
                                 <span className="text-[11px] text-slate-500">
-                                  Bill: <strong className="text-slate-800">৳{visitBill.toLocaleString()}</strong>
+                                  Visit Bill: <strong className="text-slate-800">৳{visitBill.toLocaleString()}</strong>
                                   {visitDisc > 0 && (
                                     <span className="text-emerald-700 ml-1">(-৳{visitDisc.toLocaleString()})</span>
                                   )}
                                 </span>
                               </div>
+                              {(p.previousCarriedDue ?? 0) > 0 && (
+                                <div className="text-[10px] text-amber-800 font-semibold mb-0.5">
+                                  Includes ৳{(p.previousCarriedDue || 0).toLocaleString()} carried due from prior visit
+                                </div>
+                              )}
                               {vTreatments.length === 0 && vTests.length === 0 ? (
-                                <span className="text-slate-400 italic text-[11px]">General Visit Settlement</span>
+                                <span className="text-slate-400 italic text-[11px]">General Visit / Carried Due Settlement</span>
                               ) : (
                                 <div className="text-[11px] text-slate-600 space-y-0.5">
                                   {vTreatments.map((t) => (
@@ -1805,9 +2350,12 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                               +৳{parseFloat(p.amount).toLocaleString()}
                             </td>
                             <td className="py-3 px-4 text-right whitespace-nowrap">
-                              {p.cumulativePaidAfter !== undefined && (
+                              {accountPaidSoFar !== undefined && (
                                 <div className="text-[11px] text-slate-600">
-                                  Cumulative Paid: <strong className="text-emerald-700 font-mono">৳{p.cumulativePaidAfter.toLocaleString()}</strong>
+                                  Total Paid So Far:{' '}
+                                  <strong className="text-emerald-700 font-mono">
+                                    ৳{accountPaidSoFar.toLocaleString()}
+                                  </strong>
                                 </div>
                               )}
                               {p.remainingDueAfter !== undefined && (
@@ -1838,7 +2386,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                                     patientName: profile.name,
                                     receiverName: p.receiverName,
                                     installmentNumber: instIndex,
-                                    totalInstallments: totalVisitInst,
+                                    totalInstallments: totalPatientInst,
                                     currentDueBeforeUndo: latestOutstandingDue,
                                   })
                                 }
@@ -1858,12 +2406,12 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
               </div>
             </div>
 
-            {/* 2. Visit-by-Visit Clinical Cost Breakdown Cards (Record Payment button ONLY on Latest Visit) */}
+            {/* 3. Visit-by-Visit Clinical Cost Breakdown Cards (Record Payment button ONLY on Latest Visit) */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <span className="font-bold text-slate-900 text-xs uppercase tracking-wider flex items-center gap-1.5">
                   <Stethoscope className="w-4 h-4 text-teal-600" />
-                  Visit-by-Visit Clinical Cost &amp; Running Balance Summary ({profile.visits.length} Visit{profile.visits.length === 1 ? '' : 's'})
+                  Visit-by-Visit Clinical Cost &amp; Running Balance Cards ({profile.visits.length} Visit{profile.visits.length === 1 ? '' : 's'})
                 </span>
                 <span className="text-slate-500 text-[11px]">
                   Record Payment is active on the latest visit only
@@ -2004,49 +2552,144 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
               </div>
             </div>
 
-            {/* 3. Itemized Cost Breakdown (Treatments & Diagnostic Tests) */}
+            {/* 4. Itemized Cost Breakdown (Treatments & Diagnostic Tests) */}
             {renderItemizedCostBreakdown()}
           </div>
         )}
 
-        {/* TAB 8: NOTES & FOLLOW-UPS */}
+        {/* NOTES & FOLLOW-UPS */}
         {activeTab === 'notes' && (
-          <div className="space-y-4 text-xs">
-            <h3 className="font-bold text-slate-900 text-sm">
-              Follow-Up Appointments &amp; Scheduled Reviews
-            </h3>
-
-            {profile.appointments.length === 0 ? (
-              <p className="text-slate-400 italic py-2">No follow-ups recorded.</p>
-            ) : (
-              <div className="space-y-2">
-                {profile.appointments.map((a) => (
-                  <div
-                    key={a.id}
-                    className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3"
-                  >
-                    <div>
-                      <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                        <Clock className="w-4 h-4 text-teal-600" />
-                        <span>{a.followUpDate}</span>
-                        <span className="text-xs text-slate-500 font-normal">
-                          (Doctor: {a.doctorName})
-                        </span>
-                      </div>
-                      <p className="text-slate-700 mt-1">{a.reason}</p>
-                    </div>
-
-                    <span className="px-2.5 py-1 rounded bg-teal-100 text-teal-800 font-bold border border-teal-200">
-                      {a.status}
-                    </span>
-                  </div>
-                ))}
+          <div className="space-y-6 text-xs">
+            {/* Scheduled Follow-Ups */}
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-200">
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">
+                    Scheduled Follow-Up Appointments ({profile.appointments.length})
+                  </h3>
+                  <p className="text-slate-500">
+                    Upcoming and past dental review dates synced from visits and prescriptions.
+                  </p>
+                </div>
               </div>
-            )}
+
+              {profile.appointments.length === 0 ? (
+                <div className="py-6 text-center text-slate-400 border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                  No follow-up appointments scheduled yet.
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {profile.appointments.map((a) => {
+                    const linkedVisit = a.visitId ? visitByIdMap.get(a.visitId) : undefined;
+                    const statusStyle =
+                      a.status === 'Completed'
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                        : a.status === 'Cancelled' || a.status === 'Missed'
+                        ? 'bg-rose-50 text-rose-800 border-rose-200'
+                        : 'bg-teal-100 text-teal-800 border-teal-200';
+                    return (
+                      <div
+                        key={a.id}
+                        className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-3"
+                      >
+                        <div className="space-y-1">
+                          <div className="font-bold text-slate-900 text-sm flex flex-wrap items-center gap-2">
+                            <Clock className="w-4 h-4 text-teal-600" />
+                            <span>{a.followUpDate}</span>
+                            {linkedVisit && (
+                              <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-white border border-slate-200 text-teal-800">
+                                {linkedVisit.visitId}
+                              </span>
+                            )}
+                            <span className="text-xs text-slate-500 font-medium">
+                              &bull; {a.doctorName}
+                            </span>
+                          </div>
+                          <p className="text-slate-700 font-medium">{a.reason}</p>
+                          {a.notes && <p className="text-[11px] text-slate-500">{a.notes}</p>}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {(a.smsSent || a.smsReminderSent) && (
+                            <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-800 border border-indigo-200 text-[10px] font-semibold">
+                              SMS Reminded
+                            </span>
+                          )}
+                          <span className={`px-2.5 py-1 rounded font-bold border ${statusStyle}`}>
+                            {a.status}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Doctor Clinical Notes & Visit Remarks Timeline */}
+            <div className="space-y-3">
+              <div className="pb-2 border-b border-slate-200">
+                <h3 className="font-bold text-slate-900 text-sm">
+                  Doctor Clinical Notes &amp; Visit Remarks ({visitsWithClinicalRemarks.length})
+                </h3>
+                <p className="text-slate-500">
+                  Chronological clinical complaints, diagnoses, and doctor notes across patient visits.
+                </p>
+              </div>
+
+              {visitsWithClinicalRemarks.length === 0 ? (
+                <div className="py-6 text-center text-slate-400 border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                  No clinical visit notes recorded yet.
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {visitsWithClinicalRemarks.map((v) => (
+                    <div
+                      key={v.id}
+                      className="p-3.5 rounded-xl border border-slate-200 bg-white space-y-1.5"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono font-extrabold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
+                            {v.visitId}
+                          </span>
+                          <span className="font-semibold text-slate-700">
+                            {v.visitDate}
+                            {v.visitTime ? ` at ${v.visitTime}` : ''}
+                          </span>
+                          <span className="text-teal-700 font-medium">&bull; {v.doctorName}</span>
+                        </div>
+                        {v.nextFollowUpDate && (
+                          <span className="text-[11px] font-semibold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                            Next Review: {v.nextFollowUpDate}
+                          </span>
+                        )}
+                      </div>
+
+                      {v.complaints && (
+                        <div className="text-slate-700">
+                          <strong className="text-slate-800">Chief Complaints:</strong> {v.complaints}
+                        </div>
+                      )}
+                      {v.diagnosis && (
+                        <div className="text-slate-800">
+                          <strong>Diagnosis:</strong> {v.diagnosis}
+                        </div>
+                      )}
+                      {v.notes && (
+                        <div className="text-slate-600 bg-slate-50 p-2 rounded-lg border border-slate-100 whitespace-pre-wrap">
+                          <strong className="text-slate-700">Clinical Notes:</strong> {v.notes}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
-        {/* TAB 9: PRESCRIPTION HISTORY (ONLY WHEN ENABLED BY DEVELOPER) */}
+        {/* PRESCRIPTION HISTORY (ONLY WHEN ENABLED BY DEVELOPER) */}
         {activeTab === 'prescriptions' && prescriptionManagementEnabled && (
           <PatientPrescriptionHistory
             patientId={profile.id}

@@ -55,7 +55,7 @@ export const PrescriptionPreviewModal: React.FC<PrescriptionPreviewModalProps> =
   const [revisionReason, setRevisionReason] = useState('');
   const [showCloneVisitPicker, setShowCloneVisitPicker] = useState(false);
   const [patientVisits, setPatientVisits] = useState<any[]>([]);
-  const [cloneVisitId, setCloneVisitId] = useState<number | ''>('');
+  const [cloneVisitId, setCloneVisitId] = useState<number | 'auto'>('auto');
   const [showAuditDrawer, setShowAuditDrawer] = useState(false);
 
   useEffect(() => {
@@ -169,17 +169,13 @@ export const PrescriptionPreviewModal: React.FC<PrescriptionPreviewModalProps> =
 
   const openClonePicker = async () => {
     if (!rx) return;
+    setCloneVisitId('auto');
     setShowCloneVisitPicker(true);
     try {
       const visitsList = await api.getVisits({ patientId: rx.patientId });
       setPatientVisits(visitsList);
-      if (visitsList.length > 0) {
-        setCloneVisitId(visitsList[0].id);
-      } else {
-        setCloneVisitId(rx.visitId);
-      }
     } catch {
-      setCloneVisitId(rx.visitId);
+      setPatientVisits([]);
     }
   };
 
@@ -190,7 +186,7 @@ export const PrescriptionPreviewModal: React.FC<PrescriptionPreviewModalProps> =
     try {
       const clonedDraft = await api.clonePrescription(
         rx.id,
-        cloneVisitId ? Number(cloneVisitId) : undefined
+        cloneVisitId === 'auto' ? 'auto' : Number(cloneVisitId)
       );
       setShowCloneVisitPicker(false);
       onUpdated?.();
@@ -550,18 +546,19 @@ export const PrescriptionPreviewModal: React.FC<PrescriptionPreviewModalProps> =
               <div className="flex flex-col sm:flex-row gap-2">
                 <select
                   value={cloneVisitId}
-                  onChange={(e) => setCloneVisitId(parseInt(e.target.value, 10))}
+                  onChange={(e) =>
+                    setCloneVisitId(e.target.value === 'auto' ? 'auto' : parseInt(e.target.value, 10))
+                  }
                   className="flex-1 px-3 py-2 rounded-lg border border-teal-300 bg-white text-slate-900 font-medium"
                 >
-                  {patientVisits.length > 0 ? (
-                    patientVisits.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.visitId} &bull; {v.visitDate} &bull; {v.doctorName} ({v.diagnosis || 'Consultation'})
-                      </option>
-                    ))
-                  ) : (
-                    <option value={rx.visitId}>{rx.visitCode} ({rx.visitDate})</option>
-                  )}
+                  <option value="auto">
+                    + Create New Clinic Visit Automatically (Auto VST-#)
+                  </option>
+                  {patientVisits.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.visitId} &bull; {v.visitDate} &bull; {v.doctorName} ({v.diagnosis || 'Consultation'})
+                    </option>
+                  ))}
                 </select>
                 <button
                   type="button"

@@ -26,174 +26,21 @@ import {
 } from './auth.ts';
 import { prescriptionsRouter } from './prescriptions.ts';
 import { medicinesRouter } from './medicines.ts';
+import {
+  VisitFinancialSnapshot,
+  recalculatePatientFinancials,
+  recalculateVisitFinancials,
+} from './financials.ts';
 import { eq, desc, asc, and, or, sql, like, inArray, count } from 'drizzle-orm';
+
+export type { VisitFinancialSnapshot };
+export { recalculatePatientFinancials, recalculateVisitFinancials };
 
 export const apiRouter = Router();
 apiRouter.use(prescriptionsRouter);
 apiRouter.use(medicinesRouter);
 
-export interface VisitFinancialSnapshot {
-  visitId: number;
-  visitCode: string;
-  treatmentCost: number;
-  testCost: number;
-  additionalCharges: number;
-  discount: number;
-  totalCost: number; // This visit's net bill (Treatments + Tests + Additional - Discount)
-  amountPaid: number; // Payments recorded on this visit
-  previousCarriedDue: number; // Unpaid balance carried forward from previous visits
-  cumulativePayable: number; // previousCarriedDue + totalCost
-  balanceAfterVisit: number; // Math.max(0, cumulativePayable - amountPaid)
-  outstandingDue: number; // Active collectible due (consolidated on latest visit)
-  isLatestVisit: boolean;
-}
 
-// Helper to recalculate all visits for a patient chronologically so carried-forward partial payment dues + new visit charges are 100% accurate
-// High-performance batch implementation: fetches all visits, treatment sums, test sums, and payments in parallel,
-// calculates cumulative balances in-memory, and only writes to the DB if visit figures changed.
-export async function recalculatePatientFinancials(patientId: number): Promise<Map<number, VisitFinancialSnapshot>> {
-  const [patientVisits, treatmentRows, testRows, paymentRows] = await Promise.all([
-    db
-      .select()
-      .from(visits)
-      .where(eq(visits.patientId, patientId))
-      .orderBy(asc(visits.visitDate), asc(visits.id)),
-    db
-      .select({
-        visitId: treatments.visitId,
-        total: sql<string>`COALESCE(SUM(${treatments.cost}), 0)`,
-      })
-      .from(treatments)
-      .where(eq(treatments.patientId, patientId))
-      .groupBy(treatments.visitId),
-    db
-      .select({
-        visitId: diagnosticTests.visitId,
-        total: sql<string>`COALESCE(SUM(${diagnosticTests.cost}), 0)`,
-      })
-      .from(diagnosticTests)
-      .where(eq(diagnosticTests.patientId, patientId))
-      .groupBy(diagnosticTests.visitId),
-    db
-      .select({
-        visitId: payments.visitId,
-        total: sql<string>`COALESCE(SUM(${payments.amount}), 0)`,
-      })
-      .from(payments)
-      .where(eq(payments.patientId, patientId))
-      .groupBy(payments.visitId),
-  ]);
-
-  const snapshotMap = new Map<number, VisitFinancialSnapshot>();
-  if (patientVisits.length === 0) return snapshotMap;
-
-  const treatmentMap = new Map<number, number>();
-  for (const r of treatmentRows) {
-    treatmentMap.set(r.visitId, Number(parseFloat(r.total || '0').toFixed(2)));
-  }
-
-  const testMap = new Map<number, number>();
-  for (const r of testRows) {
-    testMap.set(r.visitId, Number(parseFloat(r.total || '0').toFixed(2)));
-  }
-
-  const paymentMap = new Map<number, number>();
-  for (const r of paymentRows) {
-    paymentMap.set(r.visitId, Number(parseFloat(r.total || '0').toFixed(2)));
-  }
-
-  let runningBalanceDue = 0;
-  const updatesToRun: Promise<any>[] = [];
-
-  for (let idx = 0; idx < patientVisits.length; idx++) {
-    const v = patientVisits[idx];
-    const isLatestVisit = idx === patientVisits.length - 1;
-
-    const treatmentCost = treatmentMap.get(v.id) || 0;
-    const testCost = testMap.get(v.id) || 0;
-    const additionalCharges = Number(parseFloat(v.additionalCharges || '0').toFixed(2));
-    const discount = Number(parseFloat(v.discount || '0').toFixed(2));
-
-    // Net Visit Bill = Treatments + Tests + Additional Charges - Discount
-    const totalCost = Math.max(0, Number((treatmentCost + testCost + additionalCharges - discount).toFixed(2)));
-    const amountPaid = paymentMap.get(v.id) || 0;
-
-    // Cumulative Running Formula:
-    // Previous Carried-Forward Due + This Visit Net Cost - This Visit Payments = Balance After Visit
-    const previousCarriedDue = runningBalanceDue;
-    const cumulativePayable = Number((previousCarriedDue + totalCost).toFixed(2));
-    const balanceAfterVisit = Math.max(0, Number((cumulativePayable - amountPaid).toFixed(2)));
-    runningBalanceDue = balanceAfterVisit;
-
-    // Only the latest visit holds the active collectible due (since earlier unpaid balances are carried forward)
-    const outstandingDue = isLatestVisit ? balanceAfterVisit : 0;
-
-    const treatmentCostStr = treatmentCost.toFixed(2);
-    const testCostStr = testCost.toFixed(2);
-    const totalCostStr = totalCost.toFixed(2);
-    const amountPaidStr = amountPaid.toFixed(2);
-    const outstandingDueStr = outstandingDue.toFixed(2);
-
-    // Only update DB if fields actually changed to eliminate redundant network write cycles
-    const needsUpdate =
-      v.totalTreatmentCost !== treatmentCostStr ||
-      v.totalTestCost !== testCostStr ||
-      v.totalCost !== totalCostStr ||
-      v.amountPaid !== amountPaidStr ||
-      v.outstandingDue !== outstandingDueStr;
-
-    if (needsUpdate) {
-      updatesToRun.push(
-        db
-          .update(visits)
-          .set({
-            totalTreatmentCost: treatmentCostStr,
-            totalTestCost: testCostStr,
-            totalCost: totalCostStr,
-            amountPaid: amountPaidStr,
-            outstandingDue: outstandingDueStr,
-            updatedAt: new Date(),
-          })
-          .where(eq(visits.id, v.id))
-      );
-    }
-
-    snapshotMap.set(v.id, {
-      visitId: v.id,
-      visitCode: v.visitId,
-      treatmentCost,
-      testCost,
-      additionalCharges,
-      discount,
-      totalCost,
-      amountPaid,
-      previousCarriedDue,
-      cumulativePayable,
-      balanceAfterVisit,
-      outstandingDue,
-      isLatestVisit,
-    });
-  }
-
-  if (updatesToRun.length > 0) {
-    await Promise.all(updatesToRun);
-  }
-
-  return snapshotMap;
-}
-
-// Helper to recalculate visit financials (and synchronize the patient's entire visit chain)
-export async function recalculateVisitFinancials(visitId: number) {
-  const [currentVisit] = await db
-    .select({ id: visits.id, patientId: visits.patientId })
-    .from(visits)
-    .where(eq(visits.id, visitId));
-
-  if (!currentVisit) return null;
-
-  const snapshotMap = await recalculatePatientFinancials(currentVisit.patientId);
-  return snapshotMap.get(visitId) || null;
-}
 
 
 // ==========================================
@@ -339,52 +186,55 @@ apiRouter.post('/auth/change-password', authenticateToken, async (req: Authentic
 
 apiRouter.get('/doctors', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
-    const doctors = await db
-      .select({
-        id: users.id,
-        username: users.username,
-        fullName: users.fullName,
-        email: users.email,
-        phone: users.phone,
-        role: users.role,
-        isActive: users.isActive,
-        specialization: users.specialization,
-        qualifications: users.qualifications,
-        registrationNumber: users.registrationNumber,
-        joiningDate: users.joiningDate,
-        createdAt: users.createdAt,
-      })
-      .from(users)
-      .orderBy(asc(users.id));
+    const todayStr = new Date().toISOString().split('T')[0];
 
-    // Calculate statistics for each doctor
-    const doctorsWithStats = await Promise.all(
-      doctors.map(async (doc) => {
-        const [visitCount] = await db
-          .select({ count: count() })
-          .from(visits)
-          .where(eq(visits.doctorId, doc.id));
+    const [doctors, visitStatsRows] = await Promise.all([
+      db
+        .select({
+          id: users.id,
+          username: users.username,
+          fullName: users.fullName,
+          email: users.email,
+          phone: users.phone,
+          role: users.role,
+          isActive: users.isActive,
+          specialization: users.specialization,
+          qualifications: users.qualifications,
+          registrationNumber: users.registrationNumber,
+          joiningDate: users.joiningDate,
+          createdAt: users.createdAt,
+        })
+        .from(users)
+        .orderBy(asc(users.id)),
+      db
+        .select({
+          doctorId: visits.doctorId,
+          totalVisits: sql<string>`COUNT(*)`,
+          uniquePatients: sql<string>`COUNT(DISTINCT ${visits.patientId})`,
+          todayVisits: sql<string>`COALESCE(SUM(CASE WHEN ${visits.visitDate} = ${todayStr} THEN 1 ELSE 0 END), 0)`,
+        })
+        .from(visits)
+        .groupBy(visits.doctorId),
+    ]);
 
-        const uniquePatients = await db
-          .select({ patientId: visits.patientId })
-          .from(visits)
-          .where(eq(visits.doctorId, doc.id))
-          .groupBy(visits.patientId);
+    const statsByDoctor = new Map<number, { totalVisits: number; uniquePatients: number; todayVisits: number }>();
+    for (const row of visitStatsRows) {
+      statsByDoctor.set(row.doctorId, {
+        totalVisits: parseInt(row.totalVisits || '0', 10),
+        uniquePatients: parseInt(row.uniquePatients || '0', 10),
+        todayVisits: parseInt(row.todayVisits || '0', 10),
+      });
+    }
 
-        const todayStr = new Date().toISOString().split('T')[0];
-        const [todayVisits] = await db
-          .select({ count: count() })
-          .from(visits)
-          .where(and(eq(visits.doctorId, doc.id), eq(visits.visitDate, todayStr)));
-
-        return {
-          ...doc,
-          totalVisits: Number(visitCount?.count || 0),
-          uniquePatients: uniquePatients.length,
-          todayVisits: Number(todayVisits?.count || 0),
-        };
-      })
-    );
+    const doctorsWithStats = doctors.map((doc) => {
+      const s = statsByDoctor.get(doc.id);
+      return {
+        ...doc,
+        totalVisits: s?.totalVisits || 0,
+        uniquePatients: s?.uniquePatients || 0,
+        todayVisits: s?.todayVisits || 0,
+      };
+    });
 
     res.json(doctorsWithStats);
   } catch (error: any) {
@@ -867,127 +717,226 @@ apiRouter.post('/patients', authenticateToken, async (req: AuthenticatedRequest,
 apiRouter.get('/patients/:id', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
     const patientId = parseInt(req.params.id);
+    if (isNaN(patientId)) {
+      return res.status(400).json({ error: 'Invalid patient ID' });
+    }
 
-    const [patient] = await db
-      .select()
-      .from(patients)
-      .where(eq(patients.id, patientId));
+    // Single parallel round-trip: fetch patient + all related records simultaneously
+    const [
+      patientRows,
+      visitRecords,
+      treatmentRecords,
+      testRecords,
+      paymentRecords,
+      appointmentRecords,
+    ] = await Promise.all([
+      db.select().from(patients).where(eq(patients.id, patientId)),
+      db
+        .select({
+          id: visits.id,
+          visitId: visits.visitId,
+          patientId: visits.patientId,
+          doctorId: visits.doctorId,
+          doctorName: users.fullName,
+          doctorSpecialization: users.specialization,
+          visitDate: visits.visitDate,
+          visitTime: visits.visitTime,
+          complaints: visits.complaints,
+          diagnosis: visits.diagnosis,
+          notes: visits.notes,
+          nextFollowUpDate: visits.nextFollowUpDate,
+          totalTreatmentCost: visits.totalTreatmentCost,
+          totalTestCost: visits.totalTestCost,
+          additionalCharges: visits.additionalCharges,
+          discount: visits.discount,
+          totalCost: visits.totalCost,
+          amountPaid: visits.amountPaid,
+          outstandingDue: visits.outstandingDue,
+          status: visits.status,
+          createdAt: visits.createdAt,
+        })
+        .from(visits)
+        .innerJoin(users, eq(visits.doctorId, users.id))
+        .where(eq(visits.patientId, patientId))
+        .orderBy(desc(visits.visitDate), desc(visits.id)),
+      db
+        .select({
+          id: treatments.id,
+          visitId: treatments.visitId,
+          doctorId: treatments.doctorId,
+          doctorName: users.fullName,
+          treatmentName: treatments.treatmentName,
+          description: treatments.description,
+          toothNumber: treatments.toothNumber,
+          cost: treatments.cost,
+          status: treatments.status,
+          notes: treatments.notes,
+          treatmentDate: treatments.treatmentDate,
+        })
+        .from(treatments)
+        .innerJoin(users, eq(treatments.doctorId, users.id))
+        .where(eq(treatments.patientId, patientId))
+        .orderBy(desc(treatments.treatmentDate), desc(treatments.id)),
+      db
+        .select({
+          id: diagnosticTests.id,
+          visitId: diagnosticTests.visitId,
+          doctorId: diagnosticTests.doctorId,
+          doctorName: users.fullName,
+          testName: diagnosticTests.testName,
+          category: diagnosticTests.category,
+          description: diagnosticTests.description,
+          cost: diagnosticTests.cost,
+          status: diagnosticTests.status,
+          notes: diagnosticTests.notes,
+          testDate: diagnosticTests.testDate,
+        })
+        .from(diagnosticTests)
+        .innerJoin(users, eq(diagnosticTests.doctorId, users.id))
+        .where(eq(diagnosticTests.patientId, patientId))
+        .orderBy(desc(diagnosticTests.testDate), desc(diagnosticTests.id)),
+      db
+        .select({
+          id: payments.id,
+          paymentId: payments.paymentId,
+          visitId: payments.visitId,
+          visitCode: visits.visitId,
+          amount: payments.amount,
+          paymentMethod: payments.paymentMethod,
+          transactionRef: payments.transactionRef,
+          notes: payments.notes,
+          paymentDate: payments.paymentDate,
+          receivedBy: payments.receivedBy,
+          receiverName: users.fullName,
+          createdAt: payments.createdAt,
+        })
+        .from(payments)
+        .leftJoin(users, eq(payments.receivedBy, users.id))
+        .leftJoin(visits, eq(payments.visitId, visits.id))
+        .where(eq(payments.patientId, patientId))
+        .orderBy(desc(payments.paymentDate), desc(payments.id)),
+      db
+        .select({
+          id: appointments.id,
+          visitId: appointments.visitId,
+          doctorId: appointments.doctorId,
+          doctorName: users.fullName,
+          followUpDate: appointments.followUpDate,
+          reason: appointments.reason,
+          status: appointments.status,
+          notes: appointments.notes,
+        })
+        .from(appointments)
+        .innerJoin(users, eq(appointments.doctorId, users.id))
+        .where(eq(appointments.patientId, patientId))
+        .orderBy(desc(appointments.followUpDate)),
+    ]);
 
+    const patient = patientRows[0];
     if (!patient) {
       return res.status(404).json({ error: 'Patient not found' });
     }
 
-    // Reconcile patient's chronological visit chain so carried-forward partial payment dues + new visit charges are 100% accurate
-    const visitSnapshotMap = await recalculatePatientFinancials(patientId);
+    // Reconcile patient's chronological visit chain purely in-memory from fetched rows (zero redundant queries)
+    const treatmentSumByVisit = new Map<number, number>();
+    for (const t of treatmentRecords) {
+      treatmentSumByVisit.set(
+        t.visitId,
+        Number(((treatmentSumByVisit.get(t.visitId) || 0) + parseFloat(t.cost || '0')).toFixed(2))
+      );
+    }
 
-    // Fetch all visits in chronological order (newest first)
-    const visitRecords = await db
-      .select({
-        id: visits.id,
-        visitId: visits.visitId,
-        patientId: visits.patientId,
-        doctorId: visits.doctorId,
-        doctorName: users.fullName,
-        doctorSpecialization: users.specialization,
-        visitDate: visits.visitDate,
-        visitTime: visits.visitTime,
-        complaints: visits.complaints,
-        diagnosis: visits.diagnosis,
-        notes: visits.notes,
-        nextFollowUpDate: visits.nextFollowUpDate,
-        totalTreatmentCost: visits.totalTreatmentCost,
-        totalTestCost: visits.totalTestCost,
-        additionalCharges: visits.additionalCharges,
-        discount: visits.discount,
-        totalCost: visits.totalCost,
-        amountPaid: visits.amountPaid,
-        outstandingDue: visits.outstandingDue,
-        status: visits.status,
-        createdAt: visits.createdAt,
-      })
-      .from(visits)
-      .innerJoin(users, eq(visits.doctorId, users.id))
-      .where(eq(visits.patientId, patientId))
-      .orderBy(desc(visits.visitDate), desc(visits.id));
+    const testSumByVisit = new Map<number, number>();
+    for (const t of testRecords) {
+      testSumByVisit.set(
+        t.visitId,
+        Number(((testSumByVisit.get(t.visitId) || 0) + parseFloat(t.cost || '0')).toFixed(2))
+      );
+    }
 
-    // Fetch treatments for all visits
-    const treatmentRecords = await db
-      .select({
-        id: treatments.id,
-        visitId: treatments.visitId,
-        doctorId: treatments.doctorId,
-        doctorName: users.fullName,
-        treatmentName: treatments.treatmentName,
-        description: treatments.description,
-        toothNumber: treatments.toothNumber,
-        cost: treatments.cost,
-        status: treatments.status,
-        notes: treatments.notes,
-        treatmentDate: treatments.treatmentDate,
-      })
-      .from(treatments)
-      .innerJoin(users, eq(treatments.doctorId, users.id))
-      .where(eq(treatments.patientId, patientId))
-      .orderBy(desc(treatments.treatmentDate), desc(treatments.id));
+    const paymentSumByVisit = new Map<number, number>();
+    for (const p of paymentRecords) {
+      paymentSumByVisit.set(
+        p.visitId,
+        Number(((paymentSumByVisit.get(p.visitId) || 0) + parseFloat(p.amount || '0')).toFixed(2))
+      );
+    }
 
-    // Fetch diagnostic tests & X-rays for all visits
-    const testRecords = await db
-      .select({
-        id: diagnosticTests.id,
-        visitId: diagnosticTests.visitId,
-        doctorId: diagnosticTests.doctorId,
-        doctorName: users.fullName,
-        testName: diagnosticTests.testName,
-        category: diagnosticTests.category,
-        description: diagnosticTests.description,
-        cost: diagnosticTests.cost,
-        status: diagnosticTests.status,
-        notes: diagnosticTests.notes,
-        testDate: diagnosticTests.testDate,
-      })
-      .from(diagnosticTests)
-      .innerJoin(users, eq(diagnosticTests.doctorId, users.id))
-      .where(eq(diagnosticTests.patientId, patientId))
-      .orderBy(desc(diagnosticTests.testDate), desc(diagnosticTests.id));
+    const visitsChronoAsc = [...visitRecords].sort((a, b) => {
+      if (a.visitDate !== b.visitDate) return a.visitDate.localeCompare(b.visitDate);
+      return a.id - b.id;
+    });
 
-    // Fetch payments for all visits
-    const paymentRecords = await db
-      .select({
-        id: payments.id,
-        paymentId: payments.paymentId,
-        visitId: payments.visitId,
-        visitCode: visits.visitId,
-        amount: payments.amount,
-        paymentMethod: payments.paymentMethod,
-        transactionRef: payments.transactionRef,
-        notes: payments.notes,
-        paymentDate: payments.paymentDate,
-        receivedBy: payments.receivedBy,
-        receiverName: users.fullName,
-        createdAt: payments.createdAt,
-      })
-      .from(payments)
-      .leftJoin(users, eq(payments.receivedBy, users.id))
-      .leftJoin(visits, eq(payments.visitId, visits.id))
-      .where(eq(payments.patientId, patientId))
-      .orderBy(desc(payments.paymentDate), desc(payments.id));
+    const visitSnapshotMap = new Map<number, VisitFinancialSnapshot>();
+    let runningBalanceDue = 0;
+    const driftedVisitUpdates: Promise<any>[] = [];
 
-    // Fetch appointments/follow-ups
-    const appointmentRecords = await db
-      .select({
-        id: appointments.id,
-        visitId: appointments.visitId,
-        doctorId: appointments.doctorId,
-        doctorName: users.fullName,
-        followUpDate: appointments.followUpDate,
-        reason: appointments.reason,
-        status: appointments.status,
-        notes: appointments.notes,
-      })
-      .from(appointments)
-      .innerJoin(users, eq(appointments.doctorId, users.id))
-      .where(eq(appointments.patientId, patientId))
-      .orderBy(desc(appointments.followUpDate));
+    for (let idx = 0; idx < visitsChronoAsc.length; idx++) {
+      const v = visitsChronoAsc[idx];
+      const isLatestVisit = idx === visitsChronoAsc.length - 1;
+      const treatmentCost = treatmentSumByVisit.get(v.id) || 0;
+      const testCost = testSumByVisit.get(v.id) || 0;
+      const additionalCharges = Number(parseFloat(v.additionalCharges || '0').toFixed(2));
+      const discount = Number(parseFloat(v.discount || '0').toFixed(2));
+      const totalCost = Math.max(0, Number((treatmentCost + testCost + additionalCharges - discount).toFixed(2)));
+      const amountPaid = paymentSumByVisit.get(v.id) || 0;
+
+      const previousCarriedDue = runningBalanceDue;
+      const cumulativePayable = Number((previousCarriedDue + totalCost).toFixed(2));
+      const balanceAfterVisit = Math.max(0, Number((cumulativePayable - amountPaid).toFixed(2)));
+      runningBalanceDue = balanceAfterVisit;
+      const outstandingDue = isLatestVisit ? balanceAfterVisit : 0;
+
+      const treatmentCostStr = treatmentCost.toFixed(2);
+      const testCostStr = testCost.toFixed(2);
+      const totalCostStr = totalCost.toFixed(2);
+      const amountPaidStr = amountPaid.toFixed(2);
+      const outstandingDueStr = outstandingDue.toFixed(2);
+
+      if (
+        v.totalTreatmentCost !== treatmentCostStr ||
+        v.totalTestCost !== testCostStr ||
+        v.totalCost !== totalCostStr ||
+        v.amountPaid !== amountPaidStr ||
+        v.outstandingDue !== outstandingDueStr
+      ) {
+        driftedVisitUpdates.push(
+          db
+            .update(visits)
+            .set({
+              totalTreatmentCost: treatmentCostStr,
+              totalTestCost: testCostStr,
+              totalCost: totalCostStr,
+              amountPaid: amountPaidStr,
+              outstandingDue: outstandingDueStr,
+              updatedAt: new Date(),
+            })
+            .where(eq(visits.id, v.id))
+        );
+      }
+
+      visitSnapshotMap.set(v.id, {
+        visitId: v.id,
+        visitCode: v.visitId,
+        treatmentCost,
+        testCost,
+        additionalCharges,
+        discount,
+        totalCost,
+        amountPaid,
+        previousCarriedDue,
+        cumulativePayable,
+        balanceAfterVisit,
+        outstandingDue,
+        isLatestVisit,
+      });
+    }
+
+    if (driftedVisitUpdates.length > 0) {
+      Promise.all(driftedVisitUpdates).catch((err) =>
+        console.error('Background financial reconciliation sync error:', err)
+      );
+    }
 
     // Build unique doctors visited timeline
     const doctorsMap = new Map<number, { id: number; name: string; specialization: string; visitCount: number }>();
@@ -1067,6 +1016,7 @@ apiRouter.get('/patients/:id', authenticateToken, async (req: AuthenticatedReque
           patientInstallmentNumber: number;
           patientTotalInstallments: number;
           cumulativePaidAfter: number;
+          patientCumulativePaidAfter: number;
           remainingDueAfter: number;
           previousDueBefore: number;
           previousCarriedDue: number;
@@ -1078,8 +1028,12 @@ apiRouter.get('/patients/:id', authenticateToken, async (req: AuthenticatedReque
       >();
 
       const patientInstIndexMap = new Map<number, number>();
+      const patientRunningPaidMap = new Map<number, number>();
+      let runningAccountPaid = 0;
       chronoAsc.forEach((p, idx) => {
         patientInstIndexMap.set(p.id, idx + 1);
+        runningAccountPaid = Number((runningAccountPaid + parseFloat(p.amount || '0')).toFixed(2));
+        patientRunningPaidMap.set(p.id, runningAccountPaid);
       });
 
       for (const [vId, list] of byVisitChrono.entries()) {
@@ -1101,6 +1055,7 @@ apiRouter.get('/patients/:id', authenticateToken, async (req: AuthenticatedReque
             patientInstallmentNumber: patientInstIndexMap.get(item.id) || idx + 1,
             patientTotalInstallments: chronoAsc.length,
             cumulativePaidAfter: runningPaidOnVisit,
+            patientCumulativePaidAfter: patientRunningPaidMap.get(item.id) ?? runningPaidOnVisit,
             remainingDueAfter: remDue,
             previousDueBefore: prevDue,
             previousCarriedDue: prevCarried,
@@ -1120,6 +1075,7 @@ apiRouter.get('/patients/:id', authenticateToken, async (req: AuthenticatedReque
           patientInstallmentNumber: 1,
           patientTotalInstallments: 1,
           cumulativePaidAfter: parseFloat(p.amount || '0'),
+          patientCumulativePaidAfter: parseFloat(p.amount || '0'),
           remainingDueAfter: 0,
           previousDueBefore: parseFloat(p.amount || '0'),
           previousCarriedDue: 0,
@@ -1240,20 +1196,39 @@ apiRouter.delete(
       const [target] = await db.select().from(patients).where(eq(patients.id, patientId));
       if (!target) return res.status(404).json({ error: 'Patient not found' });
 
-      // Note: Foreign keys exist; clean up or verify
-      await db.delete(payments).where(eq(payments.patientId, patientId));
-      await db.delete(treatments).where(eq(treatments.patientId, patientId));
-      await db.delete(diagnosticTests).where(eq(diagnosticTests.patientId, patientId));
-      await db.delete(appointments).where(eq(appointments.patientId, patientId));
+      // Note: Foreign keys exist; clean up prescriptions & clinical dependencies safely
+      const patientRxRows = await db
+        .select({ id: prescriptions.id })
+        .from(prescriptions)
+        .where(eq(prescriptions.patientId, patientId));
+      const patientRxIds = patientRxRows.map((r) => r.id);
+      if (patientRxIds.length > 0) {
+        await db
+          .delete(prescriptionRevisions)
+          .where(
+            or(
+              inArray(prescriptionRevisions.prescriptionId, patientRxIds),
+              inArray(prescriptionRevisions.previousPrescriptionId, patientRxIds)
+            )
+          );
+        await db.delete(prescriptions).where(eq(prescriptions.patientId, patientId));
+      }
+
+      await Promise.all([
+        db.delete(payments).where(eq(payments.patientId, patientId)),
+        db.delete(treatments).where(eq(treatments.patientId, patientId)),
+        db.delete(diagnosticTests).where(eq(diagnosticTests.patientId, patientId)),
+        db.delete(appointments).where(eq(appointments.patientId, patientId)),
+      ]);
       await db.delete(visits).where(eq(visits.patientId, patientId));
       await db.delete(patients).where(eq(patients.id, patientId));
 
-      await logAudit(
+      logAudit(
         req.user,
         'DELETE_PATIENT',
         `Patient ${target.patientId} (${target.name})`,
         'Deleted entire patient record and associated visits/financials'
-      );
+      ).catch((e) => console.error('Audit log error:', e));
 
       res.json({ success: true, message: 'Patient record deleted.' });
     } catch (error: any) {
@@ -1337,12 +1312,13 @@ apiRouter.get('/visits', authenticateToken, async (req: AuthenticatedRequest, re
       );
     }
 
-    const list = conditions.length > 0
-      ? await baseQuery.where(and(...conditions)).orderBy(desc(visits.visitDate), desc(visits.id))
-      : await baseQuery.orderBy(desc(visits.visitDate), desc(visits.id));
+    const listPromise =
+      conditions.length > 0
+        ? baseQuery.where(and(...conditions)).orderBy(desc(visits.visitDate), desc(visits.id))
+        : baseQuery.orderBy(desc(visits.visitDate), desc(visits.id));
 
     // Compute chronological visit sequence number, cumulative balance metadata & unique doctors count per patient across all visits
-    const allVisitRefs = await db
+    const allVisitRefsPromise = db
       .select({
         id: visits.id,
         patientId: visits.patientId,
@@ -1353,6 +1329,8 @@ apiRouter.get('/visits', authenticateToken, async (req: AuthenticatedRequest, re
       })
       .from(visits)
       .orderBy(asc(visits.visitDate), asc(visits.id));
+
+    const [list, allVisitRefs] = await Promise.all([listPromise, allVisitRefsPromise]);
 
     const patientVisitSeqMap = new Map<number, number>();
     const patientTotalVisitsMap = new Map<number, number>();
@@ -1444,11 +1422,22 @@ apiRouter.post('/visits', authenticateToken, async (req: AuthenticatedRequest, r
       return res.status(400).json({ error: 'Patient ID is required.' });
     }
 
-    // Verify patient exists
-    const [patient] = await db
-      .select()
-      .from(patients)
-      .where(eq(patients.id, parseInt(patientId)));
+    // Fetch patient, latest visit ID, latest payment ID, and patient's prior visits in parallel
+    const [[patient], [latestVisit], [latestPay], priorVisits] = await Promise.all([
+      db.select().from(patients).where(eq(patients.id, parseInt(patientId))),
+      db.select({ id: visits.id }).from(visits).orderBy(desc(visits.id)).limit(1),
+      db.select({ id: payments.id }).from(payments).orderBy(desc(payments.id)).limit(1),
+      db
+        .select({
+          id: visits.id,
+          visitDate: visits.visitDate,
+          totalCost: visits.totalCost,
+          amountPaid: visits.amountPaid,
+        })
+        .from(visits)
+        .where(eq(visits.patientId, parseInt(patientId)))
+        .orderBy(asc(visits.visitDate), asc(visits.id)),
+    ]);
 
     if (!patient) {
       return res.status(404).json({ error: 'Patient not found' });
@@ -1462,13 +1451,6 @@ apiRouter.post('/visits', authenticateToken, async (req: AuthenticatedRequest, r
         attendingDoctorId = parsedDoc;
       }
     }
-
-    // Generate next Visit ID (VST-XXXX)
-    const [latestVisit] = await db
-      .select({ id: visits.id })
-      .from(visits)
-      .orderBy(desc(visits.id))
-      .limit(1);
 
     const nextVisitNumber = 1000 + (latestVisit?.id || 0) + 1;
     const generatedVisitId = `VST-${nextVisitNumber}`;
@@ -1511,13 +1493,12 @@ apiRouter.post('/visits', authenticateToken, async (req: AuthenticatedRequest, r
     const disc = parseFloat(discount || 0) || 0;
     const totalCost = Math.max(0, Number((treatmentCostTotal + testCostTotal + addCharges - disc).toFixed(2)));
 
-    // Check previous carried-forward due for this patient
-    const priorSnapshots = await recalculatePatientFinancials(patient.id);
+    // Compute prior carried-forward due cleanly from prior visits
     let priorCarriedDue = 0;
-    for (const snap of priorSnapshots.values()) {
-      if (snap.isLatestVisit) {
-        priorCarriedDue = snap.balanceAfterVisit;
-      }
+    for (const pv of priorVisits) {
+      const vNet = parseFloat(pv.totalCost || '0');
+      const vPaid = parseFloat(pv.amountPaid || '0');
+      priorCarriedDue = Math.max(0, Number((priorCarriedDue + vNet - vPaid).toFixed(2)));
     }
 
     const initPayAmount = initialPayment?.amount ? parseFloat(initialPayment.amount) : 0;
@@ -1548,47 +1529,49 @@ apiRouter.post('/visits', authenticateToken, async (req: AuthenticatedRequest, r
       })
       .returning();
 
-    // Insert treatments if any
-    for (const t of normalizedTreatments) {
-      await db.insert(treatments).values({
-        visitId: newVisit.id,
-        patientId: patient.id,
-        doctorId: attendingDoctorId,
-        treatmentName: t.treatmentName || 'Dental Treatment',
-        description: t.description,
-        toothNumber: t.toothNumber,
-        cost: t.cost.toFixed(2),
-        status: 'Completed',
-        notes: t.notes,
-        treatmentDate: vDate,
-      });
+    // Batch-insert treatments, tests, initial payment, and follow-up appointment in parallel
+    const childInsertOps: Promise<any>[] = [];
+
+    if (normalizedTreatments.length > 0) {
+      childInsertOps.push(
+        db.insert(treatments).values(
+          normalizedTreatments.map((t) => ({
+            visitId: newVisit.id,
+            patientId: patient.id,
+            doctorId: attendingDoctorId,
+            treatmentName: t.treatmentName || 'Dental Treatment',
+            description: t.description,
+            toothNumber: t.toothNumber,
+            cost: t.cost.toFixed(2),
+            status: 'Completed',
+            notes: t.notes,
+            treatmentDate: vDate,
+          }))
+        )
+      );
     }
 
-    // Insert tests if any
-    for (const t of normalizedTests) {
-      await db.insert(diagnosticTests).values({
-        visitId: newVisit.id,
-        patientId: patient.id,
-        doctorId: attendingDoctorId,
-        testName: t.testName || 'Diagnostic Test / X-Ray',
-        category: t.category,
-        description: t.description,
-        cost: t.cost.toFixed(2),
-        status: 'Completed',
-        notes: t.notes,
-        testDate: vDate,
-      });
+    if (normalizedTests.length > 0) {
+      childInsertOps.push(
+        db.insert(diagnosticTests).values(
+          normalizedTests.map((t) => ({
+            visitId: newVisit.id,
+            patientId: patient.id,
+            doctorId: attendingDoctorId,
+            testName: t.testName || 'Diagnostic Test / X-Ray',
+            category: t.category,
+            description: t.description,
+            cost: t.cost.toFixed(2),
+            status: 'Completed',
+            notes: t.notes,
+            testDate: vDate,
+          }))
+        )
+      );
     }
 
-    // Insert initial payment if any
     if (initPayAmount > 0) {
-      const [latestPay] = await db
-        .select({ id: payments.id })
-        .from(payments)
-        .orderBy(desc(payments.id))
-        .limit(1);
       const nextPayId = `PAY-${1000 + (latestPay?.id || 0) + 1}`;
-
       let collectorDoctorId = attendingDoctorId;
       if (initialPayment.receivedBy) {
         const parsed = parseInt(initialPayment.receivedBy);
@@ -1597,41 +1580,48 @@ apiRouter.post('/visits', authenticateToken, async (req: AuthenticatedRequest, r
         }
       }
 
-      await db.insert(payments).values({
-        paymentId: nextPayId,
-        patientId: patient.id,
-        visitId: newVisit.id,
-        amount: initPayAmount.toFixed(2),
-        paymentMethod: initialPayment.paymentMethod || 'Cash',
-        transactionRef: initialPayment.transactionRef?.trim() || null,
-        notes: initialPayment.notes?.trim() || null,
-        receivedBy: collectorDoctorId,
-        paymentDate: vDate,
-      });
+      childInsertOps.push(
+        db.insert(payments).values({
+          paymentId: nextPayId,
+          patientId: patient.id,
+          visitId: newVisit.id,
+          amount: initPayAmount.toFixed(2),
+          paymentMethod: initialPayment.paymentMethod || 'Cash',
+          transactionRef: initialPayment.transactionRef?.trim() || null,
+          notes: initialPayment.notes?.trim() || null,
+          receivedBy: collectorDoctorId,
+          paymentDate: vDate,
+        })
+      );
     }
 
-    // Synchronize the patient's entire visit chain so previous carried-forward dues and new visit balance are reconciled
+    if (nextFollowUpDate) {
+      childInsertOps.push(
+        db.insert(appointments).values({
+          patientId: patient.id,
+          visitId: newVisit.id,
+          doctorId: attendingDoctorId,
+          followUpDate: nextFollowUpDate,
+          reason: diagnosis ? `Follow-up for: ${diagnosis}` : 'Routine follow-up evaluation',
+          status: 'Scheduled',
+        })
+      );
+    }
+
+    if (childInsertOps.length > 0) {
+      await Promise.all(childInsertOps);
+    }
+
+    // Reconcile the patient's entire visit chain once after all rows are persisted
     const afterSnapshots = await recalculatePatientFinancials(patient.id);
     const finalSnap = afterSnapshots.get(newVisit.id);
 
-    // Insert follow-up appointment if scheduled
-    if (nextFollowUpDate) {
-      await db.insert(appointments).values({
-        patientId: patient.id,
-        visitId: newVisit.id,
-        doctorId: attendingDoctorId,
-        followUpDate: nextFollowUpDate,
-        reason: diagnosis ? `Follow-up for: ${diagnosis}` : 'Routine follow-up evaluation',
-        status: 'Scheduled',
-      });
-    }
-
-    await logAudit(
+    logAudit(
       req.user,
       'CREATE_VISIT',
       `Visit ${newVisit.visitId} for Patient ${patient.patientId} (${patient.name})`,
       `Attending Doctor: ID ${attendingDoctorId}, Treatment: ৳${treatmentCostTotal}, Visit Cost: ৳${totalCost}, Carried Due: ৳${priorCarriedDue}, Paid: ৳${initPayAmount}, Latest Due: ৳${finalSnap?.outstandingDue ?? outstandingDue}`
-    );
+    ).catch((e) => console.error('Audit log error:', e));
 
     res.status(201).json({
       ...newVisit,
@@ -1655,18 +1645,6 @@ apiRouter.post('/visits', authenticateToken, async (req: AuthenticatedRequest, r
 apiRouter.get('/visits/:id', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
     const visitId = parseInt(req.params.id);
-
-    const [visitCheck] = await db
-      .select({ patientId: visits.patientId })
-      .from(visits)
-      .where(eq(visits.id, visitId));
-
-    if (!visitCheck) {
-      return res.status(404).json({ error: 'Visit not found' });
-    }
-
-    const snapshotMap = await recalculatePatientFinancials(visitCheck.patientId);
-    const snap = snapshotMap.get(visitId);
 
     const [visit] = await db
       .select({
@@ -1708,59 +1686,59 @@ apiRouter.get('/visits/:id', authenticateToken, async (req: AuthenticatedRequest
       return res.status(404).json({ error: 'Visit not found' });
     }
 
-    // Treatments for this visit
-    const visitTreatments = await db
-      .select({
-        id: treatments.id,
-        treatmentName: treatments.treatmentName,
-        description: treatments.description,
-        toothNumber: treatments.toothNumber,
-        cost: treatments.cost,
-        status: treatments.status,
-        notes: treatments.notes,
-        treatmentDate: treatments.treatmentDate,
-        doctorName: users.fullName,
-      })
-      .from(treatments)
-      .innerJoin(users, eq(treatments.doctorId, users.id))
-      .where(eq(treatments.visitId, visitId));
+    const [snapshotMap, visitTreatments, visitTests, visitPaymentsRaw] = await Promise.all([
+      recalculatePatientFinancials(visit.patientId),
+      db
+        .select({
+          id: treatments.id,
+          treatmentName: treatments.treatmentName,
+          description: treatments.description,
+          toothNumber: treatments.toothNumber,
+          cost: treatments.cost,
+          status: treatments.status,
+          notes: treatments.notes,
+          treatmentDate: treatments.treatmentDate,
+          doctorName: users.fullName,
+        })
+        .from(treatments)
+        .innerJoin(users, eq(treatments.doctorId, users.id))
+        .where(eq(treatments.visitId, visitId)),
+      db
+        .select({
+          id: diagnosticTests.id,
+          testName: diagnosticTests.testName,
+          category: diagnosticTests.category,
+          description: diagnosticTests.description,
+          cost: diagnosticTests.cost,
+          status: diagnosticTests.status,
+          notes: diagnosticTests.notes,
+          testDate: diagnosticTests.testDate,
+          doctorName: users.fullName,
+        })
+        .from(diagnosticTests)
+        .innerJoin(users, eq(diagnosticTests.doctorId, users.id))
+        .where(eq(diagnosticTests.visitId, visitId)),
+      db
+        .select({
+          id: payments.id,
+          paymentId: payments.paymentId,
+          visitId: payments.visitId,
+          amount: payments.amount,
+          paymentMethod: payments.paymentMethod,
+          transactionRef: payments.transactionRef,
+          notes: payments.notes,
+          paymentDate: payments.paymentDate,
+          receivedBy: payments.receivedBy,
+          receiverName: users.fullName,
+          createdAt: payments.createdAt,
+        })
+        .from(payments)
+        .leftJoin(users, eq(payments.receivedBy, users.id))
+        .where(eq(payments.visitId, visitId))
+        .orderBy(desc(payments.paymentDate), desc(payments.id)),
+    ]);
 
-    // Tests for this visit
-    const visitTests = await db
-      .select({
-        id: diagnosticTests.id,
-        testName: diagnosticTests.testName,
-        category: diagnosticTests.category,
-        description: diagnosticTests.description,
-        cost: diagnosticTests.cost,
-        status: diagnosticTests.status,
-        notes: diagnosticTests.notes,
-        testDate: diagnosticTests.testDate,
-        doctorName: users.fullName,
-      })
-      .from(diagnosticTests)
-      .innerJoin(users, eq(diagnosticTests.doctorId, users.id))
-      .where(eq(diagnosticTests.visitId, visitId));
-
-    // Payments for this visit (sorted newest first, with cumulative running balance metadata)
-    const visitPaymentsRaw = await db
-      .select({
-        id: payments.id,
-        paymentId: payments.paymentId,
-        visitId: payments.visitId,
-        amount: payments.amount,
-        paymentMethod: payments.paymentMethod,
-        transactionRef: payments.transactionRef,
-        notes: payments.notes,
-        paymentDate: payments.paymentDate,
-        receivedBy: payments.receivedBy,
-        receiverName: users.fullName,
-        createdAt: payments.createdAt,
-      })
-      .from(payments)
-      .leftJoin(users, eq(payments.receivedBy, users.id))
-      .where(eq(payments.visitId, visitId))
-      .orderBy(desc(payments.paymentDate), desc(payments.id));
+    const snap = snapshotMap.get(visitId);
 
     const startingPayable = snap ? snap.cumulativePayable : parseFloat(visit.totalCost || '0');
     const prevCarried = snap ? snap.previousCarriedDue : 0;
@@ -1960,18 +1938,39 @@ apiRouter.delete(
       const [existing] = await db.select().from(visits).where(eq(visits.id, visitId));
       if (!existing) return res.status(404).json({ error: 'Visit not found' });
 
-      await db.delete(payments).where(eq(payments.visitId, visitId));
-      await db.delete(treatments).where(eq(treatments.visitId, visitId));
-      await db.delete(diagnosticTests).where(eq(diagnosticTests.visitId, visitId));
-      await db.delete(appointments).where(eq(appointments.visitId, visitId));
+      const visitRxRows = await db
+        .select({ id: prescriptions.id })
+        .from(prescriptions)
+        .where(eq(prescriptions.visitId, visitId));
+      const visitRxIds = visitRxRows.map((r) => r.id);
+      if (visitRxIds.length > 0) {
+        await db
+          .delete(prescriptionRevisions)
+          .where(
+            or(
+              inArray(prescriptionRevisions.prescriptionId, visitRxIds),
+              inArray(prescriptionRevisions.previousPrescriptionId, visitRxIds)
+            )
+          );
+        await db.delete(prescriptions).where(eq(prescriptions.visitId, visitId));
+      }
+
+      await Promise.all([
+        db.delete(payments).where(eq(payments.visitId, visitId)),
+        db.delete(treatments).where(eq(treatments.visitId, visitId)),
+        db.delete(diagnosticTests).where(eq(diagnosticTests.visitId, visitId)),
+        db.delete(appointments).where(eq(appointments.visitId, visitId)),
+      ]);
       await db.delete(visits).where(eq(visits.id, visitId));
 
-      await logAudit(
+      await recalculatePatientFinancials(existing.patientId);
+
+      logAudit(
         req.user,
         'DELETE_VISIT',
         `Visit ${existing.visitId}`,
         `Deleted by ${req.user!.fullName}`
-      );
+      ).catch((e) => console.error('Audit log error:', e));
 
       res.json({ success: true, message: 'Visit record deleted' });
     } catch (error: any) {
@@ -2755,11 +2754,16 @@ async function syncVisitFollowUpsToAppointments() {
   }
 }
 
+let hasRunInitialFollowUpSync = false;
+
 apiRouter.get('/appointments', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
     const { status, doctorId, upcomingOnly, followUpDate } = req.query;
 
-    await syncVisitFollowUpsToAppointments();
+    if (!hasRunInitialFollowUpSync) {
+      hasRunInitialFollowUpSync = true;
+      await syncVisitFollowUpsToAppointments();
+    }
 
     const baseQuery = db
       .select({
@@ -3124,35 +3128,128 @@ apiRouter.get('/dashboard/stats', authenticateToken, async (req: AuthenticatedRe
     const user = req.user!;
     const todayStr = new Date().toISOString().split('T')[0];
 
-    // Main Doctor & Developer view clinic-wide metrics
+    // Main Doctor & Developer view clinic-wide metrics (all queries in parallel)
     if (user.role === 'main_doctor' || user.role === 'developer') {
-      const [totalPatients] = await db.select({ count: count() }).from(patients);
-      const [totalDoctors] = await db.select({ count: count() }).from(users).where(eq(users.isActive, true));
-      const [totalVisits] = await db.select({ count: count() }).from(visits);
-      const [todayVisits] = await db.select({ count: count() }).from(visits).where(eq(visits.visitDate, todayStr));
-      const [upcomingFollowUps] = await db
+      const [
+        totalPatientsRows,
+        totalDoctorsRows,
+        totalVisitsRows,
+        todayVisitsRows,
+        upcomingFollowUpsRows,
+        visitAggregates,
+        recentVisits,
+        devCounts,
+      ] = await Promise.all([
+        db.select({ count: count() }).from(patients),
+        db.select({ count: count() }).from(users).where(eq(users.isActive, true)),
+        db.select({ count: count() }).from(visits),
+        db.select({ count: count() }).from(visits).where(eq(visits.visitDate, todayStr)),
+        db
+          .select({ count: count() })
+          .from(appointments)
+          .where(
+            and(
+              eq(appointments.status, 'Scheduled'),
+              sql`${appointments.followUpDate} >= ${todayStr}`
+            )
+          ),
+        db
+          .select({
+            totalTreatment: sql<string>`COALESCE(SUM(total_treatment_cost), 0)`,
+            totalTest: sql<string>`COALESCE(SUM(total_test_cost), 0)`,
+            totalCost: sql<string>`COALESCE(SUM(total_cost), 0)`,
+            totalPaid: sql<string>`COALESCE(SUM(amount_paid), 0)`,
+            totalDue: sql<string>`COALESCE(SUM(outstanding_due), 0)`,
+          })
+          .from(visits),
+        db
+          .select({
+            id: visits.id,
+            visitId: visits.visitId,
+            patientId: visits.patientId,
+            patientName: patients.name,
+            patientCode: patients.patientId,
+            doctorName: users.fullName,
+            visitDate: visits.visitDate,
+            diagnosis: visits.diagnosis,
+            totalCost: visits.totalCost,
+            amountPaid: visits.amountPaid,
+            outstandingDue: visits.outstandingDue,
+          })
+          .from(visits)
+          .innerJoin(patients, eq(visits.patientId, patients.id))
+          .innerJoin(users, eq(visits.doctorId, users.id))
+          .orderBy(desc(visits.id))
+          .limit(6),
+        user.role === 'developer'
+          ? Promise.all([
+              db.select({ count: count() }).from(users),
+              db.select({ count: count() }).from(treatments),
+              db.select({ count: count() }).from(diagnosticTests),
+              db.select({ count: count() }).from(payments),
+              db.select({ count: count() }).from(prescriptions),
+              db.select({ count: count() }).from(auditLogs),
+            ])
+          : Promise.resolve(null),
+      ]);
+
+      const developerStats = devCounts
+        ? {
+            totalUsers: devCounts[0][0]?.count || 0,
+            totalTreatments: devCounts[1][0]?.count || 0,
+            totalDiagnosticTests: devCounts[2][0]?.count || 0,
+            totalPayments: devCounts[3][0]?.count || 0,
+            totalPrescriptions: devCounts[4][0]?.count || 0,
+            totalAuditLogs: devCounts[5][0]?.count || 0,
+          }
+        : null;
+
+      return res.json({
+        role: user.role,
+        totalPatients: Number(totalPatientsRows[0]?.count || 0),
+        totalDoctors: Number(totalDoctorsRows[0]?.count || 0),
+        totalVisits: Number(totalVisitsRows[0]?.count || 0),
+        todayVisits: Number(todayVisitsRows[0]?.count || 0),
+        upcomingFollowUps: Number(upcomingFollowUpsRows[0]?.count || 0),
+        totalTreatmentCharges: parseFloat(visitAggregates[0]?.totalTreatment || '0'),
+        totalTestCharges: parseFloat(visitAggregates[0]?.totalTest || '0'),
+        totalCollection: parseFloat(visitAggregates[0]?.totalPaid || '0'),
+        totalOutstandingDues: parseFloat(visitAggregates[0]?.totalDue || '0'),
+        recentVisits,
+        developerStats,
+      });
+    }
+
+    // Doctor dashboard (Personal statistics + clinic context, all queries in parallel)
+    const [
+      myVisitsRows,
+      myUniquePatients,
+      myTodayVisitsRows,
+      myUpcomingFollowUpsRows,
+      recentVisits,
+      treatmentStats,
+    ] = await Promise.all([
+      db.select({ count: count() }).from(visits).where(eq(visits.doctorId, user.id)),
+      db
+        .select({ patientId: visits.patientId })
+        .from(visits)
+        .where(eq(visits.doctorId, user.id))
+        .groupBy(visits.patientId),
+      db
+        .select({ count: count() })
+        .from(visits)
+        .where(and(eq(visits.doctorId, user.id), eq(visits.visitDate, todayStr))),
+      db
         .select({ count: count() })
         .from(appointments)
         .where(
           and(
+            eq(appointments.doctorId, user.id),
             eq(appointments.status, 'Scheduled'),
             sql`${appointments.followUpDate} >= ${todayStr}`
           )
-        );
-
-      // Financials
-      const visitAggregates = await db
-        .select({
-          totalTreatment: sql<string>`COALESCE(SUM(total_treatment_cost), 0)`,
-          totalTest: sql<string>`COALESCE(SUM(total_test_cost), 0)`,
-          totalCost: sql<string>`COALESCE(SUM(total_cost), 0)`,
-          totalPaid: sql<string>`COALESCE(SUM(amount_paid), 0)`,
-          totalDue: sql<string>`COALESCE(SUM(outstanding_due), 0)`,
-        })
-        .from(visits);
-
-      // Recent visits
-      const recentVisits = await db
+        ),
+      db
         .select({
           id: visits.id,
           visitId: visits.visitId,
@@ -3169,107 +3266,30 @@ apiRouter.get('/dashboard/stats', authenticateToken, async (req: AuthenticatedRe
         .from(visits)
         .innerJoin(patients, eq(visits.patientId, patients.id))
         .innerJoin(users, eq(visits.doctorId, users.id))
+        .where(eq(visits.doctorId, user.id))
         .orderBy(desc(visits.id))
-        .limit(6);
-
-      // System records count for Developer
-      const developerStats = user.role === 'developer'
-        ? {
-            totalUsers: (await db.select({ count: count() }).from(users))[0]?.count || 0,
-            totalTreatments: (await db.select({ count: count() }).from(treatments))[0]?.count || 0,
-            totalDiagnosticTests: (await db.select({ count: count() }).from(diagnosticTests))[0]?.count || 0,
-            totalPayments: (await db.select({ count: count() }).from(payments))[0]?.count || 0,
-            totalPrescriptions: (await db.select({ count: count() }).from(prescriptions))[0]?.count || 0,
-            totalAuditLogs: (await db.select({ count: count() }).from(auditLogs))[0]?.count || 0,
-          }
-        : null;
-
-      return res.json({
-        role: user.role,
-        totalPatients: Number(totalPatients?.count || 0),
-        totalDoctors: Number(totalDoctors?.count || 0),
-        totalVisits: Number(totalVisits?.count || 0),
-        todayVisits: Number(todayVisits?.count || 0),
-        upcomingFollowUps: Number(upcomingFollowUps?.count || 0),
-        totalTreatmentCharges: parseFloat(visitAggregates[0]?.totalTreatment || '0'),
-        totalTestCharges: parseFloat(visitAggregates[0]?.totalTest || '0'),
-        totalCollection: parseFloat(visitAggregates[0]?.totalPaid || '0'),
-        totalOutstandingDues: parseFloat(visitAggregates[0]?.totalDue || '0'),
-        recentVisits,
-        developerStats,
-      });
-    }
-
-    // Doctor dashboard (Personal statistics + clinic context)
-    const [myVisits] = await db
-      .select({ count: count() })
-      .from(visits)
-      .where(eq(visits.doctorId, user.id));
-
-    const myUniquePatients = await db
-      .select({ patientId: visits.patientId })
-      .from(visits)
-      .where(eq(visits.doctorId, user.id))
-      .groupBy(visits.patientId);
-
-    const [myTodayVisits] = await db
-      .select({ count: count() })
-      .from(visits)
-      .where(and(eq(visits.doctorId, user.id), eq(visits.visitDate, todayStr)));
-
-    const [myUpcomingFollowUps] = await db
-      .select({ count: count() })
-      .from(appointments)
-      .where(
-        and(
-          eq(appointments.doctorId, user.id),
-          eq(appointments.status, 'Scheduled'),
-          sql`${appointments.followUpDate} >= ${todayStr}`
-        )
-      );
-
-    const recentVisits = await db
-      .select({
-        id: visits.id,
-        visitId: visits.visitId,
-        patientId: visits.patientId,
-        patientName: patients.name,
-        patientCode: patients.patientId,
-        doctorName: users.fullName,
-        visitDate: visits.visitDate,
-        diagnosis: visits.diagnosis,
-        totalCost: visits.totalCost,
-        amountPaid: visits.amountPaid,
-        outstandingDue: visits.outstandingDue,
-      })
-      .from(visits)
-      .innerJoin(patients, eq(visits.patientId, patients.id))
-      .innerJoin(users, eq(visits.doctorId, users.id))
-      .where(eq(visits.doctorId, user.id))
-      .orderBy(desc(visits.id))
-      .limit(6);
-
-    // Treatment breakdown by this doctor
-    const treatmentStats = await db
-      .select({
-        name: treatments.treatmentName,
-        count: count(),
-        totalEarned: sql<string>`COALESCE(SUM(cost), 0)`,
-      })
-      .from(treatments)
-      .where(eq(treatments.doctorId, user.id))
-      .groupBy(treatments.treatmentName)
-      .orderBy(desc(count()))
-      .limit(5);
+        .limit(6),
+      db
+        .select({
+          name: treatments.treatmentName,
+          count: count(),
+          totalEarned: sql<string>`COALESCE(SUM(cost), 0)`,
+        })
+        .from(treatments)
+        .where(eq(treatments.doctorId, user.id))
+        .groupBy(treatments.treatmentName)
+        .orderBy(desc(count()))
+        .limit(5),
+    ]);
 
     res.json({
       role: 'doctor',
       doctorId: user.id,
       doctorName: user.fullName,
-      totalVisits: Number(myVisits?.count || 0),
+      totalVisits: Number(myVisitsRows[0]?.count || 0),
       uniquePatients: myUniquePatients.length,
-      todayVisits: Number(myTodayVisits?.count || 0),
-      upcomingFollowUps: Number(myUpcomingFollowUps?.count || 0),
+      todayVisits: Number(myTodayVisitsRows[0]?.count || 0),
+      upcomingFollowUps: Number(myUpcomingFollowUpsRows[0]?.count || 0),
       recentVisits,
       treatmentStats,
     });

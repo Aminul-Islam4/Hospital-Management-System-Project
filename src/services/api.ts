@@ -512,7 +512,7 @@ export const api = {
       body: JSON.stringify({ revisionReason }),
     }),
 
-  clonePrescription: (id: number, visitId?: number) =>
+  clonePrescription: (id: number, visitId?: number | 'auto') =>
     request<Prescription>(`/api/prescriptions/${id}/clone`, {
       method: 'POST',
       body: JSON.stringify({ visitId }),

@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 
 interface PatientsPageProps {
+  refreshKey?: number;
   mode?: 'central' | 'own';
   onSelectPatient: (patientId: number) => void;
   onOpenNewPatientModal: () => void;
@@ -27,6 +28,7 @@ interface PatientsPageProps {
 }
 
 export const PatientsPage: React.FC<PatientsPageProps> = ({
+  refreshKey,
   mode = 'central',
   onSelectPatient,
   onOpenNewPatientModal,
@@ -37,6 +39,7 @@ export const PatientsPage: React.FC<PatientsPageProps> = ({
   const [patients, setPatients] = useState<Patient[]>([]);
   const [doctors, setDoctors] = useState<User[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [genderFilter, setGenderFilter] = useState('All');
   const [dueStatusFilter, setDueStatusFilter] = useState<'all' | 'due' | 'paid'>('all');
   const [selectedDoctorId, setSelectedDoctorId] = useState<string>(
@@ -46,10 +49,16 @@ export const PatientsPage: React.FC<PatientsPageProps> = ({
   const [toDate, setToDate] = useState('');
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'highest_due' | 'most_visits' | 'name'>('newest');
   const [loading, setLoading] = useState(true);
+  const requestCounterRef = React.useRef(0);
 
   useEffect(() => {
     api.getDoctors().then(setDoctors).catch(console.error);
   }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchTerm), searchTerm.trim() ? 220 : 0);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
 
   // Sync default doctor filter when switching between Central Shared Records and My Patient Records
   useEffect(() => {
@@ -62,13 +71,14 @@ export const PatientsPage: React.FC<PatientsPageProps> = ({
 
   useEffect(() => {
     fetchPatients();
-  }, [searchTerm, genderFilter, dueStatusFilter, selectedDoctorId, fromDate, toDate]);
+  }, [debouncedSearch, genderFilter, dueStatusFilter, selectedDoctorId, fromDate, toDate, refreshKey]);
 
   const fetchPatients = async () => {
+    const reqId = ++requestCounterRef.current;
     setLoading(true);
     try {
       const data = await api.getPatients({
-        search: searchTerm.trim() || undefined,
+        search: debouncedSearch.trim() || undefined,
         gender: genderFilter !== 'All' ? genderFilter : undefined,
         dueStatus: dueStatusFilter !== 'all' ? dueStatusFilter : undefined,
         hasDue: dueStatusFilter === 'due',
@@ -76,11 +86,15 @@ export const PatientsPage: React.FC<PatientsPageProps> = ({
         fromDate: fromDate.trim() || undefined,
         toDate: toDate.trim() || undefined,
       });
-      setPatients(data);
+      if (reqId === requestCounterRef.current) {
+        setPatients(data);
+      }
     } catch (e) {
       console.error('Failed to load patients:', e);
     } finally {
-      setLoading(false);
+      if (reqId === requestCounterRef.current) {
+        setLoading(false);
+      }
     }
   };
 

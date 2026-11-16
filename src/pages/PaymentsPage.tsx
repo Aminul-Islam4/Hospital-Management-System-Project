@@ -18,11 +18,16 @@ import {
 import { UndoPaymentConfirmModal, UndoPaymentTarget } from '../components/UndoPaymentConfirmModal.tsx';
 
 interface PaymentsPageProps {
+  refreshKey?: number;
   onOpenRecordPayment?: (visit: any, initialMode?: 'payment' | 'discount') => void;
   onSelectPatient?: (patientId: number) => void;
 }
 
-export const PaymentsPage: React.FC<PaymentsPageProps> = ({ onOpenRecordPayment, onSelectPatient }) => {
+export const PaymentsPage: React.FC<PaymentsPageProps> = ({
+  refreshKey,
+  onOpenRecordPayment,
+  onSelectPatient,
+}) => {
   const { user } = useAuth();
   const canFilterAllDoctors = user?.role === 'main_doctor' || user?.role === 'developer';
 
@@ -36,14 +41,21 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({ onOpenRecordPayment,
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [debouncedSearch, setDebouncedSearch] = useState<string>('');
   const [activeView, setActiveView] = useState<'ledger' | 'pending'>('ledger');
   const [loading, setLoading] = useState<boolean>(true);
   const [undoTargetPayment, setUndoTargetPayment] = useState<UndoPaymentTarget | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const requestCounterRef = React.useRef(0);
 
   useEffect(() => {
     api.getDoctors().then(setDoctors).catch(console.error);
   }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchTerm), searchTerm.trim() ? 220 : 0);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
 
   // Lock collector/doctor filter to own doctor ID when not main_doctor / developer
   useEffect(() => {
@@ -63,11 +75,21 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({ onOpenRecordPayment,
     : undefined;
 
   useEffect(() => {
-    fetchPayments();
-    fetchPendingVisits();
-  }, [selectedMethod, selectedCollectorId, fromDate, toDate, searchTerm, user?.id, canFilterAllDoctors]);
+    const reqId = ++requestCounterRef.current;
+    fetchPayments(reqId);
+    fetchPendingVisits(reqId);
+  }, [
+    selectedMethod,
+    selectedCollectorId,
+    fromDate,
+    toDate,
+    debouncedSearch,
+    user?.id,
+    canFilterAllDoctors,
+    refreshKey,
+  ]);
 
-  const fetchPayments = async () => {
+  const fetchPayments = async (reqId?: number) => {
     setLoading(true);
     try {
       const data = await api.getPayments({
@@ -75,25 +97,31 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({ onOpenRecordPayment,
         receivedBy: effectiveDoctorFilter,
         fromDate: fromDate.trim() || undefined,
         toDate: toDate.trim() || undefined,
-        search: searchTerm.trim() || undefined,
+        search: debouncedSearch.trim() || undefined,
       });
-      setPayments(data);
+      if (reqId === undefined || reqId === requestCounterRef.current) {
+        setPayments(data);
+      }
     } catch (e) {
       console.error('Failed to load payments:', e);
     } finally {
-      setLoading(false);
+      if (reqId === undefined || reqId === requestCounterRef.current) {
+        setLoading(false);
+      }
     }
   };
 
-  const fetchPendingVisits = async () => {
+  const fetchPendingVisits = async (reqId?: number) => {
     try {
       const data = await api.getPaymentDues({
         doctorId: effectiveDoctorFilter,
         fromDate: fromDate.trim() || undefined,
         toDate: toDate.trim() || undefined,
-        search: searchTerm.trim() || undefined,
+        search: debouncedSearch.trim() || undefined,
       });
-      setPendingVisits(data);
+      if (reqId === undefined || reqId === requestCounterRef.current) {
+        setPendingVisits(data);
+      }
     } catch (e) {
       console.error('Failed to load pending dues:', e);
     }

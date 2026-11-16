@@ -103,6 +103,7 @@ export interface Payment {
   patientInstallmentNumber?: number;
   patientTotalInstallments?: number;
   cumulativePaidAfter?: number;
+  patientCumulativePaidAfter?: number;
   remainingDueAfter?: number;
   previousDueBefore?: number;
   previousCarriedDue?: number;
@@ -515,6 +516,7 @@ export interface Prescription {
   diagnosis?: string | null;
   treatmentPlan?: string | null;
   showPlanCosts?: boolean;
+  syncToPatientRecords?: boolean;
   followUpDate?: string | null;
   oralHygieneInstructions?: string | null;
   toothBrushingInstructions?: string | null;
@@ -536,6 +538,7 @@ export interface Prescription {
   patientAddress?: string | null;
   patientAllergies?: string | null;
   patientExistingDiseases?: string | null;
+  patientMedicalHistory?: string | null;
   doctorName?: string;
   doctorDesignation?: string;
   doctorQualification?: string | null;

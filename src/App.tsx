@@ -214,7 +214,7 @@ function AppContent() {
           <div>
             {currentTab === 'dashboard' && (
               <DashboardPage
-                key={refreshKey}
+                refreshKey={refreshKey}
                 onNavigate={navigateToTab}
                 onSelectPatient={handleOpenPatientDetail}
                 onOpenPaymentForPatient={handleOpenPaymentForPatient}
@@ -229,7 +229,8 @@ function AppContent() {
 
             {(currentTab === 'patients' || currentTab === 'my-patients') && (
               <PatientsPage
-                key={`${currentTab}-${refreshKey}`}
+                key={currentTab}
+                refreshKey={refreshKey}
                 mode={currentTab === 'my-patients' ? 'own' : 'central'}
                 onSelectPatient={handleOpenPatientDetail}
                 onOpenNewPatientModal={() => {
@@ -264,7 +265,7 @@ function AppContent() {
 
             {currentTab === 'visits' && (
               <VisitsPage
-                key={refreshKey}
+                refreshKey={refreshKey}
                 onSelectPatient={handleOpenPatientDetail}
                 onSelectVisit={(visitId, patientId) => {
                   if (patientId) handleOpenPatientDetail(patientId);
@@ -277,7 +278,6 @@ function AppContent() {
 
             {currentTab === 'prescriptions' && (
               <PrescriptionsPage
-                key={refreshKey}
                 refreshKey={refreshKey}
                 onSelectPatient={handleOpenPatientDetail}
                 onOpenCreatePrescription={() => handleOpenCreatePrescription()}
@@ -289,7 +289,7 @@ function AppContent() {
 
             {currentTab === 'payments' && (
               <PaymentsPage
-                key={refreshKey}
+                refreshKey={refreshKey}
                 onSelectPatient={handleOpenPatientDetail}
                 onOpenRecordPayment={handleOpenRecordPayment}
               />
@@ -303,7 +303,7 @@ function AppContent() {
             )}
 
             {currentTab === 'doctors' && (
-              <DoctorsPage key={refreshKey} onOpenDoctorModal={handleOpenDoctorModal} />
+              <DoctorsPage refreshKey={refreshKey} onOpenDoctorModal={handleOpenDoctorModal} />
             )}
 
             {currentTab === 'exports' && <ExportsPage />}
@@ -334,6 +334,11 @@ function AppContent() {
         onSaved={(patient) => {
           setRefreshKey((k) => k + 1);
           handleOpenPatientDetail(patient.id);
+        }}
+        onSavedAndCreatePrescription={(patient) => {
+          setRefreshKey((k) => k + 1);
+          handleOpenPatientDetail(patient.id);
+          handleOpenCreatePrescription(patient.id);
         }}
       />
 

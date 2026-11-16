@@ -12,6 +12,9 @@ import {
   prescriptionAuditLogs,
   patients,
   visits,
+  treatments,
+  diagnosticTests,
+  appointments,
   users,
   systemSettings,
 } from '../db/schema.ts';
@@ -21,6 +24,7 @@ import {
   logAudit,
   AuthenticatedRequest,
 } from './auth.ts';
+import { recalculatePatientFinancials } from './financials.ts';
 import { generatePrescriptionPdfBuffer } from './prescriptionPdfService.ts';
 import { eq, desc, asc, and, or, sql, inArray } from 'drizzle-orm';
 
@@ -354,6 +358,7 @@ async function hydratePrescriptionsList(rxRows: any[]) {
       patientAddress: p?.address || null,
       patientAllergies: p?.allergies || null,
       patientExistingDiseases: p?.existingDiseases || null,
+      patientMedicalHistory: p?.medicalHistory || null,
       doctorName: d?.fullName || '',
       doctorDesignation: d?.specialization || 'Dental Surgeon',
       doctorQualification: d?.qualifications || null,
@@ -368,6 +373,210 @@ async function hydratePrescriptionsList(rxRows: any[]) {
       customSections: customByRx.get(rx.id) || [],
     };
   });
+}
+
+async function generateUniqueVisitCode(tx: any): Promise<string> {
+  const existing = await tx
+    .select({ id: visits.id, visitId: visits.visitId })
+    .from(visits)
+    .orderBy(desc(visits.id));
+
+  let maxNum = 1000;
+  for (const row of existing) {
+    if (row.id && 1000 + row.id > maxNum) {
+      maxNum = 1000 + row.id;
+    }
+    const match = /^VST-(\d+)$/.exec(row.visitId || '');
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (n > maxNum) maxNum = n;
+    }
+  }
+  return `VST-${maxNum + 1}`;
+}
+
+const ALLOWED_DIAGNOSTIC_TEST_CATEGORIES = new Set([
+  'Dental X-ray',
+  'OPG',
+  'IOPA',
+  'CBCT',
+  'Other',
+]);
+
+async function syncPrescriptionClinicalRecords(
+  tx: any,
+  params: {
+    rxId: number;
+    prescriptionNumber: string;
+    patientId: number;
+    visitId: number;
+    doctorId: number;
+    txDate: string;
+    followUpDate?: string | null;
+    chiefComplaints?: string | null;
+    diagnosis?: string | null;
+    syncToPatientRecords: boolean;
+    treatmentPlanItems?: {
+      sortOrder: number;
+      treatmentName: string;
+      toothNumber: string | null;
+      cost: string | null;
+      notes: string | null;
+    }[];
+    advisedTests?: {
+      sortOrder: number;
+      testName: string;
+      category: string | null;
+      cost: string | null;
+      notes: string | null;
+    }[];
+    patientMedicalHistory?: string;
+    patientExistingDiseases?: string;
+    patientAllergies?: string;
+    createdAutoVisit?: boolean;
+  }
+) {
+  // 1. Update patient past / medical / allergy history whenever supplied
+  const patientPatch: Record<string, any> = {};
+  if (params.patientMedicalHistory !== undefined) {
+    patientPatch.medicalHistory = params.patientMedicalHistory.trim() || null;
+  }
+  if (params.patientExistingDiseases !== undefined) {
+    patientPatch.existingDiseases = params.patientExistingDiseases.trim() || null;
+  }
+  if (params.patientAllergies !== undefined) {
+    patientPatch.allergies = params.patientAllergies.trim() || null;
+  }
+  if (Object.keys(patientPatch).length > 0) {
+    await tx
+      .update(patients)
+      .set({ ...patientPatch, updatedAt: new Date() })
+      .where(eq(patients.id, params.patientId));
+  }
+
+  // 2. Fill blank visit complaints / diagnosis / follow-up date if not already set on existing visit
+  if (!params.createdAutoVisit) {
+    const [existingVisit] = await tx
+      .select()
+      .from(visits)
+      .where(eq(visits.id, params.visitId));
+    if (existingVisit) {
+      const visitPatch: Record<string, any> = {};
+      if (!existingVisit.complaints && params.chiefComplaints?.trim()) {
+        visitPatch.complaints = params.chiefComplaints.trim();
+      }
+      if (!existingVisit.diagnosis && params.diagnosis?.trim()) {
+        visitPatch.diagnosis = params.diagnosis.trim();
+      }
+      if (!existingVisit.nextFollowUpDate && params.followUpDate?.trim()) {
+        visitPatch.nextFollowUpDate = params.followUpDate.trim();
+      }
+      if (Object.keys(visitPatch).length > 0) {
+        await tx
+          .update(visits)
+          .set({ ...visitPatch, updatedAt: new Date() })
+          .where(eq(visits.id, params.visitId));
+      }
+    }
+  }
+
+  // 3. Upsert follow-up appointment if followUpDate is set & sync is enabled
+  if (params.syncToPatientRecords && params.followUpDate && params.followUpDate.trim()) {
+    const cleanDate = params.followUpDate.trim();
+    const existingAppt = await tx
+      .select({ id: appointments.id })
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.patientId, params.patientId),
+          eq(appointments.followUpDate, cleanDate)
+        )
+      )
+      .limit(1);
+
+    if (existingAppt.length === 0) {
+      await tx.insert(appointments).values({
+        patientId: params.patientId,
+        visitId: params.visitId,
+        doctorId: params.doctorId,
+        followUpDate: cleanDate,
+        reason: `Follow-up (${params.prescriptionNumber})${
+          params.diagnosis?.trim() ? ` - ${params.diagnosis.trim()}` : ''
+        }`,
+        status: 'Scheduled',
+        notes: `Synced from Prescription ${params.prescriptionNumber}`,
+      });
+    }
+  }
+
+  // 4. Sync Planned Treatments -> Treatment History (treatments table)
+  if (!params.syncToPatientRecords || params.treatmentPlanItems !== undefined) {
+    await tx
+      .delete(treatments)
+      .where(eq(treatments.sourcePrescriptionId, params.rxId));
+
+    if (
+      params.syncToPatientRecords &&
+      params.treatmentPlanItems &&
+      params.treatmentPlanItems.length > 0
+    ) {
+      await tx.insert(treatments).values(
+        params.treatmentPlanItems.map((item) => ({
+          visitId: params.visitId,
+          patientId: params.patientId,
+          doctorId: params.doctorId,
+          sourcePrescriptionId: params.rxId,
+          treatmentName: item.treatmentName,
+          toothNumber: item.toothNumber,
+          cost: item.cost ?? '0.00',
+          status: 'Planned',
+          notes: item.notes || `From Rx ${params.prescriptionNumber}`,
+          treatmentDate: params.txDate,
+        }))
+      );
+    }
+  }
+
+  // 5. Sync Advised Tests -> Test & X-ray History (diagnostic_tests table)
+  if (!params.syncToPatientRecords || params.advisedTests !== undefined) {
+    await tx
+      .delete(diagnosticTests)
+      .where(eq(diagnosticTests.sourcePrescriptionId, params.rxId));
+
+    if (
+      params.syncToPatientRecords &&
+      params.advisedTests &&
+      params.advisedTests.length > 0
+    ) {
+      await tx.insert(diagnosticTests).values(
+        params.advisedTests.map((t) => {
+          const validCat =
+            t.category && ALLOWED_DIAGNOSTIC_TEST_CATEGORIES.has(t.category)
+              ? t.category
+              : 'Other';
+          const fallbackNote =
+            t.category && !ALLOWED_DIAGNOSTIC_TEST_CATEGORIES.has(t.category)
+              ? `${t.category} • From Rx ${params.prescriptionNumber}`
+              : `From Rx ${params.prescriptionNumber}`;
+          return {
+            visitId: params.visitId,
+            patientId: params.patientId,
+            doctorId: params.doctorId,
+            sourcePrescriptionId: params.rxId,
+            testName: t.testName,
+            category: validCat,
+            cost: t.cost ?? '0.00',
+            status: 'Requested',
+            notes: t.notes || fallbackNote,
+            testDate: params.txDate,
+          };
+        })
+      );
+    }
+  }
+
+  // 6. Recalculate cumulative visit & patient financials cleanly inside transaction
+  await recalculatePatientFinancials(params.patientId, tx);
 }
 
 // ==========================================
@@ -752,7 +961,7 @@ prescriptionsRouter.get(
   }
 );
 
-// Create New Prescription (Draft or Finalized)
+// Create New Prescription (Draft or Finalized; auto-creates Clinic Visit if visitId is omitted or 'auto')
 prescriptionsRouter.post(
   '/prescriptions',
   authenticateToken,
@@ -770,6 +979,7 @@ prescriptionsRouter.post(
         diagnosis,
         treatmentPlan,
         showPlanCosts,
+        syncToPatientRecords,
         treatmentPlanItems,
         advisedTests,
         customSections,
@@ -782,15 +992,31 @@ prescriptionsRouter.post(
         dietaryRecommendations,
         additionalClinicalAdvice,
         medicines,
+        patientMedicalHistory,
+        patientExistingDiseases,
+        patientAllergies,
         idempotencyKey,
       } = req.body;
 
-      if (!patientId || !visitId) {
-        return res.status(400).json({ error: 'Patient ID and Associated Visit ID are required.' });
+      if (!patientId) {
+        return res.status(400).json({ error: 'Patient ID is required.' });
       }
 
       const patIdNum = parseInt(patientId, 10);
-      const visitIdNum = parseInt(visitId, 10);
+      if (isNaN(patIdNum)) {
+        return res.status(400).json({ error: 'Invalid Patient ID.' });
+      }
+
+      const shouldAutoCreateVisit =
+        visitId === undefined ||
+        visitId === null ||
+        String(visitId).trim() === '' ||
+        String(visitId).trim().toLowerCase() === 'auto' ||
+        Number(visitId) <= 0;
+      const visitIdNum = shouldAutoCreateVisit ? null : parseInt(String(visitId), 10);
+      if (!shouldAutoCreateVisit && (visitIdNum === null || isNaN(visitIdNum))) {
+        return res.status(400).json({ error: 'Invalid Associated Visit ID.' });
+      }
 
       // Idempotency protection against accidental double-clicks
       if (idempotencyKey && typeof idempotencyKey === 'string') {
@@ -804,13 +1030,17 @@ prescriptionsRouter.post(
         }
       }
 
-      // Verify patient & visit exist and belong together
+      // Verify patient exists (and visit if explicitly supplied)
       const [pat] = await db.select().from(patients).where(eq(patients.id, patIdNum));
       if (!pat) return res.status(404).json({ error: 'Patient record not found.' });
 
-      const [vst] = await db.select().from(visits).where(eq(visits.id, visitIdNum));
-      if (!vst || vst.patientId !== pat.id) {
-        return res.status(400).json({ error: 'Selected visit does not belong to this patient.' });
+      let existingVst: any = null;
+      if (!shouldAutoCreateVisit && visitIdNum) {
+        const [vst] = await db.select().from(visits).where(eq(visits.id, visitIdNum));
+        if (!vst || vst.patientId !== pat.id) {
+          return res.status(400).json({ error: 'Selected visit does not belong to this patient.' });
+        }
+        existingVst = vst;
       }
 
       // Server-side RBAC for doctor ownership
@@ -820,6 +1050,8 @@ prescriptionsRouter.post(
         isSuper && doctorId ? parseInt(doctorId, 10) : user.id;
 
       const targetStatus = status === 'Finalized' ? 'Finalized' : 'Draft';
+      const shouldSyncRecords =
+        syncToPatientRecords !== undefined ? Boolean(syncToPatientRecords) : true;
       const medList: any[] = Array.isArray(medicines) ? medicines : [];
 
       for (const m of medList) {
@@ -859,7 +1091,39 @@ prescriptionsRouter.post(
 
       const txDate = prescriptionDate?.trim() || new Date().toISOString().split('T')[0];
 
-      const createdRx = await db.transaction(async (tx) => {
+      const { createdRx, linkedVisitCode, createdAutoVisit } = await db.transaction(async (tx) => {
+        let targetVisitRow = existingVst;
+        let wasAutoCreated = false;
+
+        if (!targetVisitRow) {
+          const generatedVisitCode = await generateUniqueVisitCode(tx);
+          const nowTime = new Date().toTimeString().slice(0, 5);
+          const [autoVisit] = await tx
+            .insert(visits)
+            .values({
+              visitId: generatedVisitCode,
+              patientId: pat.id,
+              doctorId: targetDoctorId,
+              visitDate: txDate,
+              visitTime: nowTime,
+              complaints: chiefComplaints?.trim() || null,
+              diagnosis: diagnosis?.trim() || null,
+              notes: 'Auto-created from Prescription',
+              nextFollowUpDate: followUpDate?.trim() || null,
+              totalTreatmentCost: '0.00',
+              totalTestCost: '0.00',
+              additionalCharges: '0.00',
+              discount: '0.00',
+              totalCost: '0.00',
+              amountPaid: '0.00',
+              outstandingDue: '0.00',
+              status: 'Completed',
+            })
+            .returning();
+          targetVisitRow = autoVisit;
+          wasAutoCreated = true;
+        }
+
         const rxNumber = await generateUniquePrescriptionNumber(tx);
 
         const [inserted] = await tx
@@ -868,7 +1132,7 @@ prescriptionsRouter.post(
             prescriptionNumber: rxNumber,
             patientId: pat.id,
             doctorId: targetDoctorId,
-            visitId: vst.id,
+            visitId: targetVisitRow.id,
             revisionNumber: 1,
             status: targetStatus,
             prescriptionDate: txDate,
@@ -877,6 +1141,7 @@ prescriptionsRouter.post(
             diagnosis: diagnosis?.trim() || null,
             treatmentPlan: treatmentPlan?.trim() || null,
             showPlanCosts: showPlanCosts !== undefined ? Boolean(showPlanCosts) : true,
+            syncToPatientRecords: shouldSyncRecords,
             followUpDate: followUpDate?.trim() || null,
             oralHygieneInstructions: oralHygieneInstructions?.trim() || null,
             toothBrushingInstructions: toothBrushingInstructions?.trim() || null,
@@ -891,54 +1156,87 @@ prescriptionsRouter.post(
           })
           .returning();
 
+        const childInserts: Promise<any>[] = [];
+
         if (medList.length > 0) {
-          await tx.insert(prescriptionMedicines).values(
-            medList.map((m, index) => ({
-              prescriptionId: inserted.id,
-              medicineId: m.medicineId ? parseInt(String(m.medicineId), 10) || null : null,
-              sortOrder: index + 1,
-              medicineName: String(m.medicineName).trim(),
-              genericName: m.genericName?.trim() || null,
-              strength: m.strength?.trim() || null,
-              dosageType: m.dosageType?.trim() || null,
-              manufacturer: m.manufacturer?.trim() || null,
-              packageMark: m.packageMark?.trim() || null,
-              dosage: m.dosage?.trim() || null,
-              frequency: m.frequency?.trim() || null,
-              duration: m.duration?.trim() || null,
-              quantity: null,
-              mealInstructions: m.mealInstructions?.trim() || null,
-              additionalNotes: m.additionalNotes?.trim() || null,
-            }))
+          childInserts.push(
+            tx.insert(prescriptionMedicines).values(
+              medList.map((m, index) => ({
+                prescriptionId: inserted.id,
+                medicineId: m.medicineId ? parseInt(String(m.medicineId), 10) || null : null,
+                sortOrder: index + 1,
+                medicineName: String(m.medicineName).trim(),
+                genericName: m.genericName?.trim() || null,
+                strength: m.strength?.trim() || null,
+                dosageType: m.dosageType?.trim() || null,
+                manufacturer: m.manufacturer?.trim() || null,
+                packageMark: m.packageMark?.trim() || null,
+                dosage: m.dosage?.trim() || null,
+                frequency: m.frequency?.trim() || null,
+                duration: m.duration?.trim() || null,
+                quantity: null,
+                mealInstructions: m.mealInstructions?.trim() || null,
+                additionalNotes: m.additionalNotes?.trim() || null,
+              }))
+            )
           );
         }
 
         if (normalizedPlans.length > 0) {
-          await tx.insert(prescriptionTreatmentPlans).values(
-            normalizedPlans.map((p) => ({
-              prescriptionId: inserted.id,
-              ...p,
-            }))
+          childInserts.push(
+            tx.insert(prescriptionTreatmentPlans).values(
+              normalizedPlans.map((p) => ({
+                prescriptionId: inserted.id,
+                ...p,
+              }))
+            )
           );
         }
 
         if (normalizedTests.length > 0) {
-          await tx.insert(prescriptionAdvisedTests).values(
-            normalizedTests.map((t) => ({
-              prescriptionId: inserted.id,
-              ...t,
-            }))
+          childInserts.push(
+            tx.insert(prescriptionAdvisedTests).values(
+              normalizedTests.map((t) => ({
+                prescriptionId: inserted.id,
+                ...t,
+              }))
+            )
           );
         }
 
         if (normalizedCustomSections.length > 0) {
-          await tx.insert(prescriptionCustomSections).values(
-            normalizedCustomSections.map((s) => ({
-              prescriptionId: inserted.id,
-              ...s,
-            }))
+          childInserts.push(
+            tx.insert(prescriptionCustomSections).values(
+              normalizedCustomSections.map((s) => ({
+                prescriptionId: inserted.id,
+                ...s,
+              }))
+            )
           );
         }
+
+        if (childInserts.length > 0) {
+          await Promise.all(childInserts);
+        }
+
+        await syncPrescriptionClinicalRecords(tx, {
+          rxId: inserted.id,
+          prescriptionNumber: inserted.prescriptionNumber,
+          patientId: pat.id,
+          visitId: targetVisitRow.id,
+          doctorId: targetDoctorId,
+          txDate,
+          followUpDate,
+          chiefComplaints,
+          diagnosis,
+          syncToPatientRecords: shouldSyncRecords,
+          treatmentPlanItems: normalizedPlans,
+          advisedTests: normalizedTests,
+          patientMedicalHistory,
+          patientExistingDiseases,
+          patientAllergies,
+          createdAutoVisit: wasAutoCreated,
+        });
 
         await writePrescriptionAudit(
           tx,
@@ -946,18 +1244,22 @@ prescriptionsRouter.post(
           inserted.id,
           inserted.prescriptionNumber,
           targetStatus === 'Finalized' ? 'CREATE_AND_FINALIZE_PRESCRIPTION' : 'CREATE_PRESCRIPTION_DRAFT',
-          `Created ${targetStatus} prescription ${inserted.prescriptionNumber} for ${pat.name} (${pat.patientId}) linked to ${vst.visitId} with ${medList.length} medicine(s), ${normalizedPlans.length} planned treatment(s), ${normalizedTests.length} advised test(s), ${normalizedCustomSections.length} custom heading(s).`
+          `Created ${targetStatus} prescription ${inserted.prescriptionNumber} for ${pat.name} (${pat.patientId}) linked to ${targetVisitRow.visitId}${wasAutoCreated ? ' (auto-created visit)' : ''} with ${medList.length} medicine(s), ${normalizedPlans.length} planned treatment(s), ${normalizedTests.length} advised test(s), ${normalizedCustomSections.length} custom heading(s).`
         );
 
-        return inserted;
+        return {
+          createdRx: inserted,
+          linkedVisitCode: targetVisitRow.visitId,
+          createdAutoVisit: wasAutoCreated,
+        };
       });
 
-      await logAudit(
+      logAudit(
         user,
         targetStatus === 'Finalized' ? 'FINALIZE_PRESCRIPTION' : 'CREATE_PRESCRIPTION_DRAFT',
         `Prescription ${createdRx.prescriptionNumber} (${pat.patientId})`,
-        `Linked to Visit ${vst.visitId}; ${medList.length} medicines, ${normalizedPlans.length} planned treatments, ${normalizedTests.length} advised tests, ${normalizedCustomSections.length} custom headings`
-      );
+        `Linked to Visit ${linkedVisitCode}${createdAutoVisit ? ' (Auto-Created)' : ''}; ${medList.length} medicines, ${normalizedPlans.length} planned treatments, ${normalizedTests.length} advised tests, ${normalizedCustomSections.length} custom headings`
+      ).catch((e) => console.error('Audit log error:', e));
 
       const [hydrated] = await hydratePrescriptionsList([createdRx]);
       res.status(201).json(hydrated);
@@ -1004,6 +1306,7 @@ prescriptionsRouter.put(
         diagnosis,
         treatmentPlan,
         showPlanCosts,
+        syncToPatientRecords,
         treatmentPlanItems,
         advisedTests,
         customSections,
@@ -1016,12 +1319,15 @@ prescriptionsRouter.put(
         dietaryRecommendations,
         additionalClinicalAdvice,
         medicines,
+        patientMedicalHistory,
+        patientExistingDiseases,
+        patientAllergies,
         finalizeNow,
       } = req.body;
 
       let targetVisitId = existing.visitId;
-      if (visitId) {
-        const parsedVisit = parseInt(visitId, 10);
+      if (visitId && String(visitId).trim().toLowerCase() !== 'auto' && Number(visitId) > 0) {
+        const parsedVisit = parseInt(String(visitId), 10);
         const [vst] = await db.select().from(visits).where(eq(visits.id, parsedVisit));
         if (!vst || vst.patientId !== existing.patientId) {
           return res.status(400).json({ error: 'Selected visit does not belong to this patient.' });
@@ -1066,18 +1372,25 @@ prescriptionsRouter.put(
         }
       }
 
+      const nextSyncFlag =
+        syncToPatientRecords !== undefined
+          ? Boolean(syncToPatientRecords)
+          : existing.syncToPatientRecords;
+      const nextTxDate = prescriptionDate?.trim() || existing.prescriptionDate;
+
       const updatedRx = await db.transaction(async (tx) => {
         const [updated] = await tx
           .update(prescriptions)
           .set({
             visitId: targetVisitId,
-            prescriptionDate: prescriptionDate?.trim() || existing.prescriptionDate,
+            prescriptionDate: nextTxDate,
             chiefComplaints: chiefComplaints?.trim() || null,
             clinicalFindings: clinicalFindings?.trim() || null,
             diagnosis: diagnosis?.trim() || null,
             treatmentPlan: treatmentPlan?.trim() || null,
             showPlanCosts:
               showPlanCosts !== undefined ? Boolean(showPlanCosts) : existing.showPlanCosts,
+            syncToPatientRecords: nextSyncFlag,
             followUpDate: followUpDate?.trim() || null,
             oralHygieneInstructions: oralHygieneInstructions?.trim() || null,
             toothBrushingInstructions: toothBrushingInstructions?.trim() || null,
@@ -1164,6 +1477,43 @@ prescriptionsRouter.put(
           }
         }
 
+        // Synchronize central clinical tables (patient medical history, treatment history, test history, follow-up, financials)
+        // If syncToPatientRecords toggled to true without resending items, read existing plan/test items from DB
+        let syncPlansArg = Array.isArray(treatmentPlanItems) ? normalizedPlans : undefined;
+        let syncTestsArg = Array.isArray(advisedTests) ? normalizedTests : undefined;
+        if (nextSyncFlag && !existing.syncToPatientRecords) {
+          if (syncPlansArg === undefined) {
+            syncPlansArg = await tx
+              .select()
+              .from(prescriptionTreatmentPlans)
+              .where(eq(prescriptionTreatmentPlans.prescriptionId, id));
+          }
+          if (syncTestsArg === undefined) {
+            syncTestsArg = await tx
+              .select()
+              .from(prescriptionAdvisedTests)
+              .where(eq(prescriptionAdvisedTests.prescriptionId, id));
+          }
+        }
+
+        await syncPrescriptionClinicalRecords(tx, {
+          rxId: id,
+          prescriptionNumber: existing.prescriptionNumber,
+          patientId: existing.patientId,
+          visitId: targetVisitId,
+          doctorId: existing.doctorId,
+          txDate: nextTxDate,
+          followUpDate,
+          chiefComplaints,
+          diagnosis,
+          syncToPatientRecords: nextSyncFlag,
+          treatmentPlanItems: syncPlansArg,
+          advisedTests: syncTestsArg,
+          patientMedicalHistory,
+          patientExistingDiseases,
+          patientAllergies,
+        });
+
         await writePrescriptionAudit(
           tx,
           user,
@@ -1176,12 +1526,12 @@ prescriptionsRouter.put(
         return updated;
       });
 
-      await logAudit(
+      logAudit(
         user,
         willFinalize ? 'FINALIZE_PRESCRIPTION' : 'UPDATE_PRESCRIPTION_DRAFT',
         `Prescription ${existing.prescriptionNumber}`,
         willFinalize ? 'Transitioned from Draft to Finalized' : `Updated draft (${medList.length} medicines)`
-      );
+      ).catch((e) => console.error('Audit log error:', e));
 
       const [hydrated] = await hydratePrescriptionsList([updatedRx]);
       res.json(hydrated);
@@ -1378,6 +1728,7 @@ prescriptionsRouter.post(
             diagnosis: existing.diagnosis,
             treatmentPlan: existing.treatmentPlan,
             showPlanCosts: existing.showPlanCosts,
+            syncToPatientRecords: existing.syncToPatientRecords,
             followUpDate: existing.followUpDate,
             oralHygieneInstructions: existing.oralHygieneInstructions,
             toothBrushingInstructions: existing.toothBrushingInstructions,
@@ -1389,108 +1740,128 @@ prescriptionsRouter.post(
           })
           .returning();
 
+        const revChildOps: Promise<any>[] = [];
+
         if (origMeds.length > 0) {
-          await tx.insert(prescriptionMedicines).values(
-            origMeds.map((m, idx) => ({
-              prescriptionId: revisedRx.id,
-              medicineId: m.medicineId ?? null,
-              sortOrder: idx + 1,
-              medicineName: m.medicineName,
-              genericName: m.genericName,
-              strength: m.strength,
-              dosageType: m.dosageType ?? null,
-              manufacturer: m.manufacturer ?? null,
-              packageMark: m.packageMark ?? null,
-              dosage: m.dosage,
-              frequency: m.frequency,
-              duration: m.duration,
-              quantity: m.quantity,
-              mealInstructions: m.mealInstructions,
-              additionalNotes: m.additionalNotes,
-            }))
+          revChildOps.push(
+            tx.insert(prescriptionMedicines).values(
+              origMeds.map((m, idx) => ({
+                prescriptionId: revisedRx.id,
+                medicineId: m.medicineId ?? null,
+                sortOrder: idx + 1,
+                medicineName: m.medicineName,
+                genericName: m.genericName,
+                strength: m.strength,
+                dosageType: m.dosageType ?? null,
+                manufacturer: m.manufacturer ?? null,
+                packageMark: m.packageMark ?? null,
+                dosage: m.dosage,
+                frequency: m.frequency,
+                duration: m.duration,
+                quantity: m.quantity,
+                mealInstructions: m.mealInstructions,
+                additionalNotes: m.additionalNotes,
+              }))
+            )
           );
         }
 
         if (origPlans.length > 0) {
-          await tx.insert(prescriptionTreatmentPlans).values(
-            origPlans.map((p, idx) => ({
-              prescriptionId: revisedRx.id,
-              sortOrder: idx + 1,
-              treatmentName: p.treatmentName,
-              toothNumber: p.toothNumber,
-              cost: p.cost,
-              notes: p.notes,
-            }))
+          revChildOps.push(
+            tx.insert(prescriptionTreatmentPlans).values(
+              origPlans.map((p, idx) => ({
+                prescriptionId: revisedRx.id,
+                sortOrder: idx + 1,
+                treatmentName: p.treatmentName,
+                toothNumber: p.toothNumber,
+                cost: p.cost,
+                notes: p.notes,
+              }))
+            )
           );
         }
 
         if (origTests.length > 0) {
-          await tx.insert(prescriptionAdvisedTests).values(
-            origTests.map((t, idx) => ({
-              prescriptionId: revisedRx.id,
-              sortOrder: idx + 1,
-              testName: t.testName,
-              category: t.category,
-              cost: t.cost,
-              notes: t.notes,
-            }))
+          revChildOps.push(
+            tx.insert(prescriptionAdvisedTests).values(
+              origTests.map((t, idx) => ({
+                prescriptionId: revisedRx.id,
+                sortOrder: idx + 1,
+                testName: t.testName,
+                category: t.category,
+                cost: t.cost,
+                notes: t.notes,
+              }))
+            )
           );
         }
 
         if (origCustomSections.length > 0) {
-          await tx.insert(prescriptionCustomSections).values(
-            origCustomSections.map((s, idx) => ({
-              prescriptionId: revisedRx.id,
-              sortOrder: idx + 1,
-              heading: s.heading,
-              content: s.content,
-            }))
+          revChildOps.push(
+            tx.insert(prescriptionCustomSections).values(
+              origCustomSections.map((s, idx) => ({
+                prescriptionId: revisedRx.id,
+                sortOrder: idx + 1,
+                heading: s.heading,
+                content: s.content,
+              }))
+            )
           );
         }
 
-        // Save immutable snapshot of original finalized record
-        await tx.insert(prescriptionRevisions).values({
-          prescriptionId: revisedRx.id,
-          previousPrescriptionId: existing.id,
-          revisionNumber: nextRevNum,
-          revisionReason: revisionReason?.trim() || 'Clinical adjustment / revision created',
-          snapshotJson: JSON.stringify({
-            prescription: existing,
-            medicines: origMeds,
-            treatmentPlanItems: origPlans,
-            advisedTests: origTests,
-            customSections: origCustomSections,
+        // Transfer synced central clinical history rows to the new revision so it never double-bills
+        revChildOps.push(
+          tx
+            .update(treatments)
+            .set({ sourcePrescriptionId: revisedRx.id })
+            .where(eq(treatments.sourcePrescriptionId, existing.id)),
+          tx
+            .update(diagnosticTests)
+            .set({ sourcePrescriptionId: revisedRx.id })
+            .where(eq(diagnosticTests.sourcePrescriptionId, existing.id)),
+          tx.insert(prescriptionRevisions).values({
+            prescriptionId: revisedRx.id,
+            previousPrescriptionId: existing.id,
+            revisionNumber: nextRevNum,
+            revisionReason: revisionReason?.trim() || 'Clinical adjustment / revision created',
+            snapshotJson: JSON.stringify({
+              prescription: existing,
+              medicines: origMeds,
+              treatmentPlanItems: origPlans,
+              advisedTests: origTests,
+              customSections: origCustomSections,
+            }),
+            createdBy: user.id,
           }),
-          createdBy: user.id,
-        });
-
-        await writePrescriptionAudit(
-          tx,
-          user,
-          existing.id,
-          existing.prescriptionNumber,
-          'SUPERSEDED_BY_REVISION',
-          `Marked ${existing.prescriptionNumber} as Revised -> new revision ${revisedRx.prescriptionNumber} (v${nextRevNum}). Reason: ${revisionReason || 'Clinical update'}`
+          writePrescriptionAudit(
+            tx,
+            user,
+            existing.id,
+            existing.prescriptionNumber,
+            'SUPERSEDED_BY_REVISION',
+            `Marked ${existing.prescriptionNumber} as Revised -> new revision ${revisedRx.prescriptionNumber} (v${nextRevNum}). Reason: ${revisionReason || 'Clinical update'}`
+          ),
+          writePrescriptionAudit(
+            tx,
+            user,
+            revisedRx.id,
+            revisedRx.prescriptionNumber,
+            'CREATE_REVISION',
+            `Created Revision v${nextRevNum} (${revisedRx.prescriptionNumber}) from ${existing.prescriptionNumber}.`
+          )
         );
 
-        await writePrescriptionAudit(
-          tx,
-          user,
-          revisedRx.id,
-          revisedRx.prescriptionNumber,
-          'CREATE_REVISION',
-          `Created Revision v${nextRevNum} (${revisedRx.prescriptionNumber}) from ${existing.prescriptionNumber}.`
-        );
+        await Promise.all(revChildOps);
 
         return revisedRx;
       });
 
-      await logAudit(
+      logAudit(
         user,
         'REVISE_PRESCRIPTION',
         `Prescription ${existing.prescriptionNumber} -> ${result.prescriptionNumber}`,
         revisionReason?.trim() || `Created Revision v${result.revisionNumber}`
-      );
+      ).catch((e) => console.error('Audit log error:', e));
 
       const [hydrated] = await hydratePrescriptionsList([result]);
       res.status(201).json(hydrated);
@@ -1517,28 +1888,55 @@ prescriptionsRouter.post(
 
       const user = req.user!;
 
-      // Determine target visit (provided visitId or latest visit for the patient)
-      let targetVisitId = source.visitId;
-      if (visitId) {
-        const parsed = parseInt(visitId, 10);
+      // Determine target visit (auto-create new visit by default when omitted or 'auto')
+      const shouldAutoCreateVisit =
+        visitId === undefined ||
+        visitId === null ||
+        String(visitId).trim() === '' ||
+        String(visitId).trim().toLowerCase() === 'auto';
+
+      let explicitVisitId: number | null = null;
+      if (!shouldAutoCreateVisit) {
+        const parsed = parseInt(String(visitId), 10);
         const [vst] = await db.select().from(visits).where(eq(visits.id, parsed));
         if (!vst || vst.patientId !== source.patientId) {
           return res.status(400).json({ error: 'Selected visit does not belong to this patient.' });
         }
-        targetVisitId = vst.id;
-      } else {
-        const patientVisits = await db
-          .select()
-          .from(visits)
-          .where(eq(visits.patientId, source.patientId))
-          .orderBy(desc(visits.visitDate), desc(visits.id))
-          .limit(1);
-        if (patientVisits.length > 0) {
-          targetVisitId = patientVisits[0].id;
-        }
+        explicitVisitId = vst.id;
       }
 
       const cloned = await db.transaction(async (tx) => {
+        const todayStr = new Date().toISOString().split('T')[0];
+        let targetVisitId = explicitVisitId;
+
+        if (!targetVisitId) {
+          const generatedVisitCode = await generateUniqueVisitCode(tx);
+          const nowTime = new Date().toTimeString().slice(0, 5);
+          const [autoVisit] = await tx
+            .insert(visits)
+            .values({
+              visitId: generatedVisitCode,
+              patientId: source.patientId,
+              doctorId: user.id,
+              visitDate: todayStr,
+              visitTime: nowTime,
+              complaints: source.chiefComplaints || null,
+              diagnosis: source.diagnosis || null,
+              notes: `Auto-created from Prescription template ${source.prescriptionNumber}`,
+              nextFollowUpDate: null,
+              totalTreatmentCost: '0.00',
+              totalTestCost: '0.00',
+              additionalCharges: '0.00',
+              discount: '0.00',
+              totalCost: '0.00',
+              amountPaid: '0.00',
+              outstandingDue: '0.00',
+              status: 'Completed',
+            })
+            .returning();
+          targetVisitId = autoVisit.id;
+        }
+
         const [sourceMeds, sourcePlans, sourceTests, sourceCustomSections] = await Promise.all([
           tx
             .select()
@@ -1563,7 +1961,6 @@ prescriptionsRouter.post(
         ]);
 
         const newNumber = await generateUniquePrescriptionNumber(tx);
-        const todayStr = new Date().toISOString().split('T')[0];
 
         const [inserted] = await tx
           .insert(prescriptions)
@@ -1667,7 +2064,7 @@ prescriptionsRouter.post(
         user,
         'CLONE_PRESCRIPTION_TEMPLATE',
         `Prescription ${cloned.prescriptionNumber} (from ${source.prescriptionNumber})`,
-        `Cloned previous prescription into new draft for Visit ID ${targetVisitId}`
+        `Cloned previous prescription into new draft for Visit ID ${cloned.visitId}`
       );
 
       const [hydrated] = await hydratePrescriptionsList([cloned]);
@@ -1706,23 +2103,27 @@ prescriptionsRouter.delete(
         });
       }
 
-      await writePrescriptionAudit(
-        db,
-        user,
-        null,
-        existing.prescriptionNumber,
-        'DELETE_PRESCRIPTION_DRAFT',
-        `Deleted draft prescription ${existing.prescriptionNumber}.`
-      );
+      await db.transaction(async (tx) => {
+        await tx.delete(treatments).where(eq(treatments.sourcePrescriptionId, id));
+        await tx.delete(diagnosticTests).where(eq(diagnosticTests.sourcePrescriptionId, id));
+        await writePrescriptionAudit(
+          tx,
+          user,
+          null,
+          existing.prescriptionNumber,
+          'DELETE_PRESCRIPTION_DRAFT',
+          `Deleted draft prescription ${existing.prescriptionNumber}.`
+        );
+        await tx.delete(prescriptions).where(eq(prescriptions.id, id));
+        await recalculatePatientFinancials(existing.patientId, tx);
+      });
 
-      await db.delete(prescriptions).where(eq(prescriptions.id, id));
-
-      await logAudit(
+      logAudit(
         user,
         'DELETE_PRESCRIPTION_DRAFT',
         `Prescription ${existing.prescriptionNumber}`,
-        'Deleted draft prescription'
-      );
+        'Deleted draft prescription and removed synced treatment/test items'
+      ).catch((e) => console.error('Audit log error:', e));
 
       res.json({ success: true });
     } catch (error) {

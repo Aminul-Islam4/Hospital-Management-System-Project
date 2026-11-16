@@ -29,143 +29,208 @@ export const users = pgTable('users', {
 });
 
 // Patients table (Centralized permanent patient records)
-export const patients = pgTable('patients', {
-  id: serial('id').primaryKey(),
-  patientId: text('patient_id').notNull().unique(), // e.g., DP-1001
-  name: text('name').notNull(),
-  phone: text('phone').notNull(),
-  altPhone: text('alt_phone'),
-  age: integer('age'),
-  gender: text('gender').notNull(), // 'Male' | 'Female' | 'Other'
-  address: text('address'),
-  registrationDate: text('registration_date').notNull(), // YYYY-MM-DD
-  medicalHistory: text('medical_history'),
-  allergies: text('allergies'),
-  existingDiseases: text('existing_diseases'),
-  notes: text('notes'),
-  createdBy: integer('created_by').references(() => users.id),
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
-});
+export const patients = pgTable(
+  'patients',
+  {
+    id: serial('id').primaryKey(),
+    patientId: text('patient_id').notNull().unique(), // e.g., DP-1001
+    name: text('name').notNull(),
+    phone: text('phone').notNull(),
+    altPhone: text('alt_phone'),
+    age: integer('age'),
+    gender: text('gender').notNull(), // 'Male' | 'Female' | 'Other'
+    address: text('address'),
+    registrationDate: text('registration_date').notNull(), // YYYY-MM-DD
+    medicalHistory: text('medical_history'),
+    allergies: text('allergies'),
+    existingDiseases: text('existing_diseases'),
+    notes: text('notes'),
+    createdBy: integer('created_by').references(() => users.id),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+  },
+  (table) => [
+    index('idx_patients_name').on(table.name),
+    index('idx_patients_phone').on(table.phone),
+    index('idx_patients_reg_date').on(table.registrationDate),
+  ]
+);
 
 // Visits table (Shared across all doctors)
-export const visits = pgTable('visits', {
-  id: serial('id').primaryKey(),
-  visitId: text('visit_id').notNull().unique(), // e.g., VST-1001
-  patientId: integer('patient_id')
-    .notNull()
-    .references(() => patients.id),
-  doctorId: integer('doctor_id')
-    .notNull()
-    .references(() => users.id),
-  visitDate: text('visit_date').notNull(), // YYYY-MM-DD
-  visitTime: text('visit_time'), // HH:mm
-  complaints: text('complaints'),
-  diagnosis: text('diagnosis'),
-  notes: text('notes'),
-  nextFollowUpDate: text('next_follow_up_date'),
-  totalTreatmentCost: numeric('total_treatment_cost', { precision: 12, scale: 2 }).notNull().default('0'),
-  totalTestCost: numeric('total_test_cost', { precision: 12, scale: 2 }).notNull().default('0'),
-  additionalCharges: numeric('additional_charges', { precision: 12, scale: 2 }).notNull().default('0'),
-  discount: numeric('discount', { precision: 12, scale: 2 }).notNull().default('0'),
-  totalCost: numeric('total_cost', { precision: 12, scale: 2 }).notNull().default('0'),
-  amountPaid: numeric('amount_paid', { precision: 12, scale: 2 }).notNull().default('0'),
-  outstandingDue: numeric('outstanding_due', { precision: 12, scale: 2 }).notNull().default('0'),
-  status: text('status').notNull().default('Completed'), // 'Completed' | 'In Progress' | 'Cancelled'
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
-});
+export const visits = pgTable(
+  'visits',
+  {
+    id: serial('id').primaryKey(),
+    visitId: text('visit_id').notNull().unique(), // e.g., VST-1001
+    patientId: integer('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    doctorId: integer('doctor_id')
+      .notNull()
+      .references(() => users.id),
+    visitDate: text('visit_date').notNull(), // YYYY-MM-DD
+    visitTime: text('visit_time'), // HH:mm
+    complaints: text('complaints'),
+    diagnosis: text('diagnosis'),
+    notes: text('notes'),
+    nextFollowUpDate: text('next_follow_up_date'),
+    totalTreatmentCost: numeric('total_treatment_cost', { precision: 12, scale: 2 }).notNull().default('0'),
+    totalTestCost: numeric('total_test_cost', { precision: 12, scale: 2 }).notNull().default('0'),
+    additionalCharges: numeric('additional_charges', { precision: 12, scale: 2 }).notNull().default('0'),
+    discount: numeric('discount', { precision: 12, scale: 2 }).notNull().default('0'),
+    totalCost: numeric('total_cost', { precision: 12, scale: 2 }).notNull().default('0'),
+    amountPaid: numeric('amount_paid', { precision: 12, scale: 2 }).notNull().default('0'),
+    outstandingDue: numeric('outstanding_due', { precision: 12, scale: 2 }).notNull().default('0'),
+    status: text('status').notNull().default('Completed'), // 'Completed' | 'In Progress' | 'Cancelled'
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+  },
+  (table) => [
+    index('idx_visits_patient_id').on(table.patientId),
+    index('idx_visits_doctor_id').on(table.doctorId),
+    index('idx_visits_visit_date').on(table.visitDate),
+    index('idx_visits_patient_chrono').on(table.patientId, table.visitDate, table.id),
+  ]
+);
 
 // Treatments table (Multiple per visit)
-export const treatments = pgTable('treatments', {
-  id: serial('id').primaryKey(),
-  visitId: integer('visit_id')
-    .notNull()
-    .references(() => visits.id),
-  patientId: integer('patient_id')
-    .notNull()
-    .references(() => patients.id),
-  doctorId: integer('doctor_id')
-    .notNull()
-    .references(() => users.id),
-  treatmentName: text('treatment_name').notNull(),
-  description: text('description'),
-  toothNumber: text('tooth_number'),
-  cost: numeric('cost', { precision: 12, scale: 2 }).notNull().default('0'),
-  status: text('status').notNull().default('Completed'), // 'Completed' | 'Ongoing' | 'Planned'
-  notes: text('notes'),
-  treatmentDate: text('treatment_date').notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+export const treatments = pgTable(
+  'treatments',
+  {
+    id: serial('id').primaryKey(),
+    visitId: integer('visit_id')
+      .notNull()
+      .references(() => visits.id),
+    patientId: integer('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    doctorId: integer('doctor_id')
+      .notNull()
+      .references(() => users.id),
+    sourcePrescriptionId: integer('source_prescription_id'),
+    treatmentName: text('treatment_name').notNull(),
+    description: text('description'),
+    toothNumber: text('tooth_number'),
+    cost: numeric('cost', { precision: 12, scale: 2 }).notNull().default('0'),
+    status: text('status').notNull().default('Completed'), // 'Completed' | 'Ongoing' | 'Planned'
+    notes: text('notes'),
+    treatmentDate: text('treatment_date').notNull(),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => [
+    index('idx_treatments_visit_id').on(table.visitId),
+    index('idx_treatments_patient_id').on(table.patientId),
+    index('idx_treatments_doctor_id').on(table.doctorId),
+    index('idx_treatments_date').on(table.treatmentDate),
+    index('idx_treatments_source_rx').on(table.sourcePrescriptionId),
+  ]
+);
 
 // Diagnostic Tests and X-rays table (Mandatory module)
-export const diagnosticTests = pgTable('diagnostic_tests', {
-  id: serial('id').primaryKey(),
-  visitId: integer('visit_id')
-    .notNull()
-    .references(() => visits.id),
-  patientId: integer('patient_id')
-    .notNull()
-    .references(() => patients.id),
-  doctorId: integer('doctor_id')
-    .notNull()
-    .references(() => users.id),
-  testName: text('test_name').notNull(),
-  category: text('category').notNull(), // 'Dental X-ray' | 'OPG' | 'IOPA' | 'CBCT' | 'Other'
-  description: text('description'),
-  cost: numeric('cost', { precision: 12, scale: 2 }).notNull().default('0'),
-  status: text('status').notNull().default('Completed'), // 'Completed' | 'Requested' | 'Pending'
-  notes: text('notes'),
-  testDate: text('test_date').notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+export const diagnosticTests = pgTable(
+  'diagnostic_tests',
+  {
+    id: serial('id').primaryKey(),
+    visitId: integer('visit_id')
+      .notNull()
+      .references(() => visits.id),
+    patientId: integer('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    doctorId: integer('doctor_id')
+      .notNull()
+      .references(() => users.id),
+    sourcePrescriptionId: integer('source_prescription_id'),
+    testName: text('test_name').notNull(),
+    category: text('category').notNull(), // 'Dental X-ray' | 'OPG' | 'IOPA' | 'CBCT' | 'Other'
+    description: text('description'),
+    cost: numeric('cost', { precision: 12, scale: 2 }).notNull().default('0'),
+    status: text('status').notNull().default('Completed'), // 'Completed' | 'Requested' | 'Pending'
+    notes: text('notes'),
+    testDate: text('test_date').notNull(),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => [
+    index('idx_diagnostic_tests_visit_id').on(table.visitId),
+    index('idx_diagnostic_tests_patient_id').on(table.patientId),
+    index('idx_diagnostic_tests_doctor_id').on(table.doctorId),
+    index('idx_diagnostic_tests_date').on(table.testDate),
+    index('idx_diagnostic_tests_source_rx').on(table.sourcePrescriptionId),
+  ]
+);
 
 // Payments table (Partial payments supported per visit)
-export const payments = pgTable('payments', {
-  id: serial('id').primaryKey(),
-  paymentId: text('payment_id').notNull().unique(), // e.g., PAY-1001
-  patientId: integer('patient_id')
-    .notNull()
-    .references(() => patients.id),
-  visitId: integer('visit_id')
-    .notNull()
-    .references(() => visits.id),
-  amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
-  paymentMethod: text('payment_method').notNull(), // 'Cash' | 'bKash' | 'Nagad' | 'Bank transfer' | 'Other'
-  transactionRef: text('transaction_ref'),
-  notes: text('notes'),
-  receivedBy: integer('received_by').references(() => users.id),
-  paymentDate: text('payment_date').notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+export const payments = pgTable(
+  'payments',
+  {
+    id: serial('id').primaryKey(),
+    paymentId: text('payment_id').notNull().unique(), // e.g., PAY-1001
+    patientId: integer('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    visitId: integer('visit_id')
+      .notNull()
+      .references(() => visits.id),
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    paymentMethod: text('payment_method').notNull(), // 'Cash' | 'bKash' | 'Nagad' | 'Bank transfer' | 'Other'
+    transactionRef: text('transaction_ref'),
+    notes: text('notes'),
+    receivedBy: integer('received_by').references(() => users.id),
+    paymentDate: text('payment_date').notNull(),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => [
+    index('idx_payments_visit_id').on(table.visitId),
+    index('idx_payments_patient_id').on(table.patientId),
+    index('idx_payments_received_by').on(table.receivedBy),
+    index('idx_payments_payment_date').on(table.paymentDate),
+  ]
+);
 
 // Appointments / Follow-ups table
-export const appointments = pgTable('appointments', {
-  id: serial('id').primaryKey(),
-  patientId: integer('patient_id')
-    .notNull()
-    .references(() => patients.id),
-  visitId: integer('visit_id').references(() => visits.id),
-  doctorId: integer('doctor_id')
-    .notNull()
-    .references(() => users.id),
-  followUpDate: text('follow_up_date').notNull(), // YYYY-MM-DD
-  reason: text('reason').notNull(),
-  status: text('status').notNull().default('Scheduled'), // 'Scheduled' | 'Completed' | 'Cancelled' | 'Missed'
-  notes: text('notes'),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+export const appointments = pgTable(
+  'appointments',
+  {
+    id: serial('id').primaryKey(),
+    patientId: integer('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    visitId: integer('visit_id').references(() => visits.id),
+    doctorId: integer('doctor_id')
+      .notNull()
+      .references(() => users.id),
+    followUpDate: text('follow_up_date').notNull(), // YYYY-MM-DD
+    reason: text('reason').notNull(),
+    status: text('status').notNull().default('Scheduled'), // 'Scheduled' | 'Completed' | 'Cancelled' | 'Missed'
+    notes: text('notes'),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => [
+    index('idx_appointments_patient_id').on(table.patientId),
+    index('idx_appointments_visit_id').on(table.visitId),
+    index('idx_appointments_doctor_id').on(table.doctorId),
+    index('idx_appointments_date').on(table.followUpDate),
+    index('idx_appointments_status').on(table.status),
+  ]
+);
 
 // Audit logs table
-export const auditLogs = pgTable('audit_logs', {
-  id: serial('id').primaryKey(),
-  userId: integer('user_id').references(() => users.id),
-  userRole: text('user_role').notNull(),
-  action: text('action').notNull(), // e.g. 'CREATE_PATIENT', 'UPDATE_VISIT', 'RECORD_PAYMENT'
-  affectedRecord: text('affected_record').notNull(), // e.g. 'Patient DP-1001'
-  details: text('details'),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+export const auditLogs = pgTable(
+  'audit_logs',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id),
+    userRole: text('user_role').notNull(),
+    action: text('action').notNull(), // e.g. 'CREATE_PATIENT', 'UPDATE_VISIT', 'RECORD_PAYMENT'
+    affectedRecord: text('affected_record').notNull(), // e.g. 'Patient DP-1001'
+    details: text('details'),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => [
+    index('idx_audit_logs_created_at').on(table.createdAt),
+    index('idx_audit_logs_user_id').on(table.userId),
+  ]
+);
 
 // System settings table
 export const systemSettings = pgTable('system_settings', {
@@ -214,6 +279,7 @@ export const prescriptions = pgTable(
     diagnosis: text('diagnosis'),
     treatmentPlan: text('treatment_plan'),
     showPlanCosts: boolean('show_plan_costs').notNull().default(true),
+    syncToPatientRecords: boolean('sync_to_patient_records').notNull().default(true),
     followUpDate: text('follow_up_date'),
     oralHygieneInstructions: text('oral_hygiene_instructions'),
     toothBrushingInstructions: text('tooth_brushing_instructions'),

@@ -14,10 +14,11 @@ import {
 } from 'lucide-react';
 
 interface DoctorsPageProps {
+  refreshKey?: number;
   onOpenDoctorModal: (doctor?: User) => void;
 }
 
-export const DoctorsPage: React.FC<DoctorsPageProps> = ({ onOpenDoctorModal }) => {
+export const DoctorsPage: React.FC<DoctorsPageProps> = ({ refreshKey, onOpenDoctorModal }) => {
   const { user } = useAuth();
   const [doctors, setDoctors] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,7 +31,7 @@ export const DoctorsPage: React.FC<DoctorsPageProps> = ({ onOpenDoctorModal }) =
 
   useEffect(() => {
     fetchDoctors();
-  }, []);
+  }, [refreshKey]);
 
   const fetchDoctors = async () => {
     setLoading(true);

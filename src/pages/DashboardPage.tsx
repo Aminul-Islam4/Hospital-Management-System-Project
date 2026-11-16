@@ -28,6 +28,7 @@ import { Patient } from '../types/index.ts';
 import { DeveloperFeatureToggleCard } from '../components/DeveloperFeatureToggleCard.tsx';
 
 interface DashboardPageProps {
+  refreshKey?: number;
   onNavigate: (tab: string, context?: any) => void;
   onOpenNewPatient: () => void;
   onOpenNewVisit: (patient?: any) => void;
@@ -37,6 +38,7 @@ interface DashboardPageProps {
 }
 
 export const DashboardPage: React.FC<DashboardPageProps> = ({
+  refreshKey,
   onNavigate,
   onOpenNewPatient,
   onOpenNewVisit,
@@ -55,7 +57,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 
   useEffect(() => {
     loadStats();
-  }, [user, prescriptionManagementEnabled]);
+  }, [user, prescriptionManagementEnabled, refreshKey]);
 
   // Debounced landing page patient search
   useEffect(() => {

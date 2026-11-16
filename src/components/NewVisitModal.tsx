@@ -116,21 +116,28 @@ export const NewVisitModal: React.FC<NewVisitModalProps> = ({
       setVisitDate(new Date().toISOString().split('T')[0]);
       setVisitTime(new Date().toTimeString().slice(0, 5));
 
-      // Always fetch full patient list and doctors list
-      api.getPatients().then((list) => {
-        setPatientsList(list);
-      }).catch(console.error);
+      // Only fetch full patient list if no defaultPatient is provided
+      if (!defaultPatient?.id) {
+        api.getPatients().then((list) => {
+          setPatientsList(list);
+        }).catch(console.error);
+      }
 
-      api.getDoctors().then((docs) => {
-        setDoctorsList(docs);
-        if (user?.id) {
-          setSelectedDoctorId(user.id);
-          setCollectorDoctorId(user.id);
-        } else if (docs.length > 0) {
-          setSelectedDoctorId(docs[0].id);
-          setCollectorDoctorId(docs[0].id);
-        }
-      }).catch(console.error);
+      if (doctorsList.length === 0) {
+        api.getDoctors().then((docs) => {
+          setDoctorsList(docs);
+          if (user?.id) {
+            setSelectedDoctorId(user.id);
+            setCollectorDoctorId(user.id);
+          } else if (docs.length > 0) {
+            setSelectedDoctorId(docs[0].id);
+            setCollectorDoctorId(docs[0].id);
+          }
+        }).catch(console.error);
+      } else if (user?.id) {
+        setSelectedDoctorId(user.id);
+        setCollectorDoctorId(user.id);
+      }
 
       if (defaultPatient?.id) {
         setSelectedPatientId(defaultPatient.id);
@@ -140,6 +147,13 @@ export const NewVisitModal: React.FC<NewVisitModalProps> = ({
       }
     }
   }, [isOpen, defaultPatient, user]);
+
+  // Lazy-fetch full patient list only when user explicitly clicks "Change patient"
+  useEffect(() => {
+    if (isOpen && isSwitchingPatient && patientsList.length === 0) {
+      api.getPatients().then(setPatientsList).catch(console.error);
+    }
+  }, [isOpen, isSwitchingPatient, patientsList.length]);
 
   // Whenever selectedPatientId changes, load that patient's current carried-forward balance
   useEffect(() => {
@@ -152,13 +166,29 @@ export const NewVisitModal: React.FC<NewVisitModalProps> = ({
       setPreviousCarriedDue(0);
       return;
     }
+
+    if (!isSwitchingPatient && defaultPatient?.id === pid) {
+      const embeddedDue =
+        (defaultPatient as any).financialSummary?.totalOutstandingDue ?? defaultPatient.totalDue;
+      if (typeof embeddedDue === 'number' && Number.isFinite(embeddedDue)) {
+        setPreviousCarriedDue(embeddedDue);
+        return;
+      }
+    }
+
+    const fromList = patientsList.find((p) => p.id === pid);
+    if (fromList && typeof fromList.totalDue === 'number' && Number.isFinite(fromList.totalDue)) {
+      setPreviousCarriedDue(fromList.totalDue);
+      return;
+    }
+
     api
       .getPatient(pid)
       .then((fp) => {
         setPreviousCarriedDue(fp?.financialSummary?.totalOutstandingDue || 0);
       })
       .catch(() => setPreviousCarriedDue(0));
-  }, [isOpen, selectedPatientId]);
+  }, [isOpen, selectedPatientId, isSwitchingPatient, defaultPatient]);
 
   if (!isOpen) return null;
 

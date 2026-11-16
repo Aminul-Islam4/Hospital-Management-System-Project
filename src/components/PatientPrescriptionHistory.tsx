@@ -112,8 +112,7 @@ export const PatientPrescriptionHistory: React.FC<PatientPrescriptionHistoryProp
   const handleCloneAsNew = async (rx: Prescription) => {
     setBusyId(rx.id);
     try {
-      const latestVisitId = visits.length > 0 ? visits[0].id : rx.visitId;
-      const cloned = await api.clonePrescription(rx.id, latestVisitId);
+      const cloned = await api.clonePrescription(rx.id, 'auto');
       await loadHistory();
       onClonedPrescription(cloned);
     } catch (err: any) {
@@ -163,7 +162,7 @@ export const PatientPrescriptionHistory: React.FC<PatientPrescriptionHistoryProp
 
         <button
           type="button"
-          onClick={() => onCreatePrescription(visits[0]?.id)}
+          onClick={() => onCreatePrescription()}
           className="px-3.5 py-2 text-xs font-bold rounded-lg bg-teal-600 hover:bg-teal-700 text-white shadow-xs flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
         >
           <Plus className="w-4 h-4" />
@@ -276,6 +275,18 @@ export const PatientPrescriptionHistory: React.FC<PatientPrescriptionHistoryProp
               ) : (
                 filtered.map((rx) => {
                   const canModify = Boolean(user && (isSuper || rx.doctorId === user.id));
+                  const linkedVisit = visits.find((v) => v.id === rx.visitId);
+                  const medNames = (rx.medicines || [])
+                    .map((m) => `${m.medicineName}${m.strength ? ` ${m.strength}` : ''}`)
+                    .filter(Boolean);
+                  const planSum = (rx.treatmentPlanItems || []).reduce(
+                    (sum, item) => sum + (item.cost ? parseFloat(item.cost) : 0),
+                    0
+                  );
+                  const testSum = (rx.advisedTests || []).reduce(
+                    (sum, item) => sum + (item.cost ? parseFloat(item.cost) : 0),
+                    0
+                  );
                   return (
                     <tr key={rx.id} className="hover:bg-teal-50/40 transition-colors">
                       <td className="py-3 px-4 whitespace-nowrap">
@@ -300,21 +311,34 @@ export const PatientPrescriptionHistory: React.FC<PatientPrescriptionHistoryProp
                           {rx.doctorName}
                         </span>
                       </td>
-                      <td className="py-3 px-4 whitespace-nowrap font-mono font-bold text-slate-700">
-                        {rx.visitCode}
+                      <td className="py-3 px-4 whitespace-nowrap">
+                        <div className="font-mono font-bold text-slate-700">{rx.visitCode}</div>
+                        {linkedVisit?.visitDate && (
+                          <div className="text-[10px] text-slate-500">{linkedVisit.visitDate}</div>
+                        )}
                       </td>
-                      <td className="py-3 px-4 max-w-xs">
+                      <td className="py-3 px-4 max-w-xs space-y-0.5">
                         <div className="font-semibold text-slate-900 truncate">
-                          {rx.diagnosis || 'General Dental Prescription'}
+                          {rx.diagnosis || rx.chiefComplaints || 'General Dental Prescription'}
                         </div>
-                        <div className="text-[11px] text-slate-500">
-                          {rx.medicines?.length || 0} medicine(s)
-                          {(rx.treatmentPlanItems?.length || 0) > 0
-                            ? ` • ${rx.treatmentPlanItems!.length} planned`
-                            : ''}
-                          {(rx.advisedTests?.length || 0) > 0
-                            ? ` • ${rx.advisedTests!.length} test(s)`
-                            : ''}
+                        {medNames.length > 0 && (
+                          <div className="text-[11px] text-teal-800 truncate">
+                            Rx: {medNames.slice(0, 2).join(', ')}
+                            {medNames.length > 2 ? ` +${medNames.length - 2} more` : ''}
+                          </div>
+                        )}
+                        <div className="text-[10px] text-slate-500 flex flex-wrap items-center gap-x-2">
+                          <span>{rx.medicines?.length || 0} med(s)</span>
+                          {(rx.treatmentPlanItems?.length || 0) > 0 && (
+                            <span className="text-indigo-700 font-semibold">
+                              • {rx.treatmentPlanItems!.length} plan{planSum > 0 ? ` (৳${planSum.toLocaleString()})` : ''}
+                            </span>
+                          )}
+                          {(rx.advisedTests?.length || 0) > 0 && (
+                            <span className="text-cyan-700 font-semibold">
+                              • {rx.advisedTests!.length} test{testSum > 0 ? ` (৳${testSum.toLocaleString()})` : ''}
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap text-slate-600">

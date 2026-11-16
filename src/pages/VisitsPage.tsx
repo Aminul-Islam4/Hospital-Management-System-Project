@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 
 interface VisitsPageProps {
+  refreshKey?: number;
   onSelectVisit: (visitId: number, patientId?: number) => void;
   onSelectPatient?: (patientId: number) => void;
   onOpenNewVisit: () => void;
@@ -28,6 +29,7 @@ interface VisitsPageProps {
 }
 
 export const VisitsPage: React.FC<VisitsPageProps> = ({
+  refreshKey,
   onSelectVisit,
   onSelectPatient,
   onOpenNewVisit,
@@ -43,17 +45,25 @@ export const VisitsPage: React.FC<VisitsPageProps> = ({
   const [dueStatusFilter, setDueStatusFilter] = useState<'all' | 'due' | 'paid'>('all');
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'highest_cost' | 'highest_due'>('newest');
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [debouncedSearch, setDebouncedSearch] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
+  const requestCounterRef = React.useRef(0);
 
   useEffect(() => {
     api.getDoctors().then(setDoctors).catch(console.error);
   }, []);
 
   useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(searchTerm), searchTerm.trim() ? 220 : 0);
+    return () => clearTimeout(t);
+  }, [searchTerm]);
+
+  useEffect(() => {
     fetchVisits();
-  }, [selectedDoctorId, fromDate, toDate, dueStatusFilter, searchTerm]);
+  }, [selectedDoctorId, fromDate, toDate, dueStatusFilter, debouncedSearch, refreshKey]);
 
   const fetchVisits = async () => {
+    const reqId = ++requestCounterRef.current;
     setLoading(true);
     try {
       const data = await api.getVisits({
@@ -62,13 +72,17 @@ export const VisitsPage: React.FC<VisitsPageProps> = ({
         toDate: toDate.trim() || undefined,
         dueStatus: dueStatusFilter !== 'all' ? dueStatusFilter : undefined,
         hasDue: dueStatusFilter === 'due',
-        search: searchTerm.trim() || undefined,
+        search: debouncedSearch.trim() || undefined,
       });
-      setVisits(data);
+      if (reqId === requestCounterRef.current) {
+        setVisits(data);
+      }
     } catch (e) {
       console.error('Failed to load visits:', e);
     } finally {
-      setLoading(false);
+      if (reqId === requestCounterRef.current) {
+        setLoading(false);
+      }
     }
   };
 
