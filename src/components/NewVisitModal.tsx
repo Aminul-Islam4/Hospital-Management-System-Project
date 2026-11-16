@@ -37,11 +37,11 @@ const COMMON_TREATMENTS = [
 ];
 
 const COMMON_TESTS = [
-  { name: 'Intraoral Periapical Radiograph (IOPA)', category: 'IOPA', cost: 300 },
-  { name: 'Orthopantomogram (OPG - Full Mouth)', category: 'OPG', cost: 1200 },
-  { name: 'Dental Cone Beam CT (CBCT)', category: 'CBCT', cost: 3500 },
-  { name: 'Bite-wing X-ray', category: 'Dental X-ray', cost: 400 },
-  { name: 'Blood Glucose Test (Random)', category: 'Other', cost: 200 },
+  { name: 'Intraoral Periapical Radiograph (IOPA)', category: 'IOPA', cost: '' },
+  { name: 'Orthopantomogram (OPG - Full Mouth)', category: 'OPG', cost: '' },
+  { name: 'Dental Cone Beam CT (CBCT)', category: 'CBCT', cost: '' },
+  { name: 'Bite-wing X-ray', category: 'Dental X-ray', cost: '' },
+  { name: 'Blood Glucose Test (Random)', category: 'Other', cost: '' },
 ];
 
 export const NewVisitModal: React.FC<NewVisitModalProps> = ({
@@ -231,14 +231,14 @@ export const NewVisitModal: React.FC<NewVisitModalProps> = ({
   };
 
   // Add Test item
-  const handleAddTest = (preset?: { name: string; category: string; cost: number }) => {
+  const handleAddTest = (preset?: { name: string; category: string; cost?: string | number }) => {
     setTests([
       ...tests,
       {
         testName: preset?.name || '',
         category: preset?.category || 'Dental X-ray',
         description: '',
-        cost: preset?.cost ? preset.cost.toString() : '0',
+        cost: preset?.cost ? String(preset.cost) : '',
       },
     ]);
   };
@@ -657,7 +657,7 @@ export const NewVisitModal: React.FC<NewVisitModalProps> = ({
                   onClick={() => handleAddTest(ct)}
                   className="px-2 py-0.5 text-[11px] rounded bg-white border border-slate-200 text-slate-700 hover:border-cyan-500 hover:text-cyan-700 transition-colors cursor-pointer"
                 >
-                  + {ct.name} (৳{ct.cost})
+                  + {ct.name}
                 </button>
               ))}
             </div>
@@ -709,7 +709,7 @@ export const NewVisitModal: React.FC<NewVisitModalProps> = ({
                         <input
                           type="number"
                           min="0"
-                          placeholder="Cost"
+                          placeholder="Custom ৳ (Opt.)"
                           value={t.cost}
                           onChange={(e) => {
                             const updated = [...tests];

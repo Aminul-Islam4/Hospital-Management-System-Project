@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
 import { Visit, User } from '../types/index.ts';
+import { formatDateDDMMYYYY } from '../utils/dateFormat.ts';
 import {
   CalendarCheck,
   Search,
@@ -414,7 +415,7 @@ export const VisitsPage: React.FC<VisitsPageProps> = ({
                         </span>
                       </td>
                       <td className="py-3.5 px-4 text-slate-600 whitespace-nowrap">
-                        <div className="font-medium text-slate-800">{v.visitDate}</div>
+                        <div className="font-medium text-slate-800">{formatDateDDMMYYYY(v.visitDate)}</div>
                         {v.visitTime && <div className="text-[10px] text-slate-400">{v.visitTime}</div>}
                       </td>
                       <td className="py-3.5 px-4 max-w-xs">

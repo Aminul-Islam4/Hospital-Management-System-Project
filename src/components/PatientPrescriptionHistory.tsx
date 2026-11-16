@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
 import { Prescription, Visit, User } from '../types/index.ts';
-import { downloadPrescriptionPdf } from '../utils/prescriptionPdf.ts';
+import { downloadPrescriptionPdf, printPrescription } from '../utils/prescriptionPdf.ts';
+import { formatDateDDMMYYYY } from '../utils/dateFormat.ts';
 import {
   FileText,
   Plus,
@@ -211,7 +212,7 @@ export const PatientPrescriptionHistory: React.FC<PatientPrescriptionHistoryProp
           <option value="All">All Associated Visits</option>
           {visits.map((v) => (
             <option key={v.id} value={v.id}>
-              {v.visitId} ({v.visitDate})
+              {v.visitId} ({formatDateDDMMYYYY(v.visitDate)})
             </option>
           ))}
         </select>
@@ -302,7 +303,7 @@ export const PatientPrescriptionHistory: React.FC<PatientPrescriptionHistoryProp
                       <td className="py-3 px-4 text-slate-700 whitespace-nowrap font-medium">
                         <span className="inline-flex items-center gap-1">
                           <Calendar className="w-3 h-3 text-slate-400" />
-                          {rx.prescriptionDate}
+                          {formatDateDDMMYYYY(rx.prescriptionDate)}
                         </span>
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
@@ -314,7 +315,9 @@ export const PatientPrescriptionHistory: React.FC<PatientPrescriptionHistoryProp
                       <td className="py-3 px-4 whitespace-nowrap">
                         <div className="font-mono font-bold text-slate-700">{rx.visitCode}</div>
                         {linkedVisit?.visitDate && (
-                          <div className="text-[10px] text-slate-500">{linkedVisit.visitDate}</div>
+                          <div className="text-[10px] text-slate-500">
+                            {formatDateDDMMYYYY(linkedVisit.visitDate)}
+                          </div>
                         )}
                       </td>
                       <td className="py-3 px-4 max-w-xs space-y-0.5">
@@ -342,7 +345,7 @@ export const PatientPrescriptionHistory: React.FC<PatientPrescriptionHistoryProp
                         </div>
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap text-slate-600">
-                        {rx.followUpDate || '-'}
+                        {rx.followUpDate ? formatDateDDMMYYYY(rx.followUpDate) : '-'}
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
                         <span
@@ -410,11 +413,12 @@ export const PatientPrescriptionHistory: React.FC<PatientPrescriptionHistoryProp
 
                             <button
                               type="button"
-                              onClick={() => onPreviewPrescription(rx.id)}
+                              onClick={() => printPrescription(rx)}
                               className="px-2 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-semibold inline-flex items-center gap-1 cursor-pointer"
-                              title="Open Print View"
+                              title="Print Prescription (A4)"
                             >
                               <Printer className="w-3.5 h-3.5 text-slate-600" />
+                              <span>Print</span>
                             </button>
 
                             <button

@@ -463,11 +463,11 @@ export async function seedInitialData() {
       {
         key: 'default_test_prices',
         value: JSON.stringify([
-          { name: 'Intraoral Periapical Radiograph (IOPA)', category: 'IOPA', defaultCost: 300 },
-          { name: 'Orthopantomogram (OPG - Full Mouth Panoramic)', category: 'OPG', defaultCost: 1200 },
-          { name: 'Dental Cone Beam CT (CBCT - Single Jaw)', category: 'CBCT', defaultCost: 3500 },
-          { name: 'Bite-wing X-ray', category: 'Dental X-ray', defaultCost: 400 },
-          { name: 'Blood Glucose Test (Random)', category: 'Other', defaultCost: 200 },
+          { name: 'Intraoral Periapical Radiograph (IOPA)', category: 'IOPA', defaultCost: 0 },
+          { name: 'Orthopantomogram (OPG - Full Mouth Panoramic)', category: 'OPG', defaultCost: 0 },
+          { name: 'Dental Cone Beam CT (CBCT - Single Jaw)', category: 'CBCT', defaultCost: 0 },
+          { name: 'Bite-wing X-ray', category: 'Dental X-ray', defaultCost: 0 },
+          { name: 'Blood Glucose Test (Random)', category: 'Other', defaultCost: 0 },
         ]),
         description: 'Standard diagnostic test and radiograph pricing list',
       },

@@ -2,13 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
 import { Prescription, User } from '../types/index.ts';
-import { downloadPrescriptionPdf } from '../utils/prescriptionPdf.ts';
+import { downloadPrescriptionPdf, printPrescription } from '../utils/prescriptionPdf.ts';
+import { formatDateDDMMYYYY } from '../utils/dateFormat.ts';
 import {
   FileText,
   Plus,
   Search,
   Eye,
   Download,
+  Printer,
   Copy,
   Edit2,
   Trash2,
@@ -376,7 +378,7 @@ export const PrescriptionsPage: React.FC<PrescriptionsPageProps> = ({
                         </span>
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="font-semibold text-slate-800">{rx.prescriptionDate}</div>
+                        <div className="font-semibold text-slate-800">{formatDateDDMMYYYY(rx.prescriptionDate)}</div>
                         <div className="text-[11px] font-mono text-slate-500">{rx.visitCode}</div>
                       </td>
                       <td className="py-3 px-4 max-w-xs">
@@ -391,7 +393,7 @@ export const PrescriptionsPage: React.FC<PrescriptionsPageProps> = ({
                           {(rx.advisedTests?.length || 0) > 0
                             ? ` • ${rx.advisedTests!.length} test(s)`
                             : ''}
-                          {rx.followUpDate ? ` • Follow-up: ${rx.followUpDate}` : ''}
+                          {rx.followUpDate ? ` • Follow-up: ${formatDateDDMMYYYY(rx.followUpDate)}` : ''}
                         </div>
                       </td>
                       <td className="py-3 px-4 whitespace-nowrap">
@@ -450,6 +452,15 @@ export const PrescriptionsPage: React.FC<PrescriptionsPageProps> = ({
                             >
                               <Download className="w-3.5 h-3.5 text-teal-600" />
                               <span>PDF</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => printPrescription(rx)}
+                              className="px-2.5 py-1 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-semibold inline-flex items-center gap-1 cursor-pointer"
+                              title="Print Prescription (A4)"
+                            >
+                              <Printer className="w-3.5 h-3.5 text-slate-600" />
+                              <span>Print</span>
                             </button>
                             <button
                               type="button"

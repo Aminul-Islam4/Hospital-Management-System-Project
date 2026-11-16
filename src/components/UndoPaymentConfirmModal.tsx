@@ -1,5 +1,6 @@
 import React from 'react';
 import { AlertTriangle, RotateCcw, Trash2, X, Receipt, Calendar, CreditCard, ArrowRight } from 'lucide-react';
+import { formatDateDDMMYYYY } from '../utils/dateFormat.ts';
 
 export interface UndoPaymentTarget {
   id: number;
@@ -136,7 +137,7 @@ export const UndoPaymentConfirmModal: React.FC<UndoPaymentConfirmModalProps> = (
                 <div className="flex items-center gap-1.5">
                   <Calendar className="w-3.5 h-3.5 text-slate-400" />
                   <span>
-                    Date: <strong className="text-slate-800">{payment.paymentDate}</strong>
+                    Date: <strong className="text-slate-800">{formatDateDDMMYYYY(payment.paymentDate)}</strong>
                   </span>
                 </div>
               )}

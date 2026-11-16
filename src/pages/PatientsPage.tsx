@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
 import { Patient, User } from '../types/index.ts';
+import { formatDateDDMMYYYY } from '../utils/dateFormat.ts';
 import {
   Users,
   UserCheck,
@@ -474,8 +475,8 @@ export const PatientsPage: React.FC<PatientsPageProps> = ({
                         </div>
                       </td>
                       <td className="py-3.5 px-4 text-slate-600 whitespace-nowrap">
-                        <div>{p.lastVisitDate ? `Last: ${p.lastVisitDate}` : 'No visit yet'}</div>
-                        <div className="text-[10px] text-slate-400">Reg: {p.registrationDate}</div>
+                        <div>{p.lastVisitDate ? `Last: ${formatDateDDMMYYYY(p.lastVisitDate)}` : 'No visit yet'}</div>
+                        <div className="text-[10px] text-slate-400">Reg: {formatDateDDMMYYYY(p.registrationDate)}</div>
                       </td>
                       <td className="py-3.5 px-4 text-right font-bold text-slate-900 whitespace-nowrap">
                         <div>৳{(p.totalExpenses || 0).toLocaleString()}</div>

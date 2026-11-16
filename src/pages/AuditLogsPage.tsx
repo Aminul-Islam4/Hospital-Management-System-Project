@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../services/api.ts';
 import { AuditLog } from '../types/index.ts';
 import { ShieldAlert, Shield, Clock, User as UserIcon } from 'lucide-react';
+import { formatDateTimeDDMMYYYY } from '../utils/dateFormat.ts';
 
 export const AuditLogsPage: React.FC = () => {
   const [logs, setLogs] = useState<AuditLog[]>([]);
@@ -65,7 +66,7 @@ export const AuditLogsPage: React.FC = () => {
                 logs.map((log) => (
                   <tr key={log.id} className="hover:bg-slate-50/80">
                     <td className="py-3 px-4 text-slate-500 whitespace-nowrap">
-                      {new Date(log.createdAt).toLocaleString()}
+                      {formatDateTimeDDMMYYYY(log.createdAt)}
                     </td>
                     <td className="py-3 px-4 font-semibold text-slate-900">
                       {log.userName || log.username || 'System'}

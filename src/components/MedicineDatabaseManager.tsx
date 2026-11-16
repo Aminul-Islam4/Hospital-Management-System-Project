@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { api } from '../services/api.ts';
+import { formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../utils/dateFormat.ts';
 import {
   CatalogMedicine,
   MedicineAuditLog,
@@ -532,7 +533,7 @@ export const MedicineDatabaseManager: React.FC = () => {
                   {overview.lastImport.status}
                 </span>
                 <div className="text-[10px] text-slate-500 truncate mt-0.5">
-                  {new Date(overview.lastImport.createdAt).toLocaleDateString()}
+                  {formatDateDDMMYYYY(overview.lastImport.createdAt)}
                 </div>
               </div>
             ) : (
@@ -1302,7 +1303,7 @@ export const MedicineDatabaseManager: React.FC = () => {
                         </td>
                         <td className="py-2 px-3 text-slate-500">
                           {s.createdByName || 'System'} &bull;{' '}
-                          {new Date(s.createdAt).toLocaleString()}
+                          {formatDateTimeDDMMYYYY(s.createdAt)}
                         </td>
                         <td className="py-2 px-3 text-right">
                           {confirmRollbackId === s.id ? (
@@ -1392,7 +1393,7 @@ export const MedicineDatabaseManager: React.FC = () => {
                         </td>
                         <td className="py-2 px-3 text-slate-500 whitespace-nowrap">
                           {b.uploadedByName || 'Auto-Seed'} &bull;{' '}
-                          {new Date(b.createdAt).toLocaleString()}
+                          {formatDateTimeDDMMYYYY(b.createdAt)}
                         </td>
                       </tr>
                     ))}
@@ -1415,7 +1416,7 @@ export const MedicineDatabaseManager: React.FC = () => {
                     </div>
                     <span className="text-[11px] text-slate-500">
                       {log.userName || log.userRole} &bull;{' '}
-                      {new Date(log.createdAt).toLocaleString()}
+                      {formatDateTimeDDMMYYYY(log.createdAt)}
                     </span>
                   </div>
                   {log.details && <div className="text-slate-600">{log.details}</div>}
@@ -1634,7 +1635,7 @@ export const MedicineDatabaseManager: React.FC = () => {
                             <div className="flex items-center justify-between">
                               <span className="font-mono font-bold text-teal-800">{l.action}</span>
                               <span className="text-slate-500">
-                                {l.userName || l.userRole} · {new Date(l.createdAt).toLocaleString()}
+                                {l.userName || l.userRole} · {formatDateTimeDDMMYYYY(l.createdAt)}
                               </span>
                             </div>
                             <div className="text-slate-700">{l.details}</div>

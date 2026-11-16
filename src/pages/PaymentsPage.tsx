@@ -16,6 +16,7 @@ import {
   Lock,
 } from 'lucide-react';
 import { UndoPaymentConfirmModal, UndoPaymentTarget } from '../components/UndoPaymentConfirmModal.tsx';
+import { formatDateDDMMYYYY } from '../utils/dateFormat.ts';
 
 interface PaymentsPageProps {
   refreshKey?: number;
@@ -31,7 +32,7 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({
   const { user } = useAuth();
   const canFilterAllDoctors = user?.role === 'main_doctor' || user?.role === 'developer';
 
-  const [payments, setPayments] = useState<Payment[]>([]);
+  const [allPayments, setAllPayments] = useState<Payment[]>([]);
   const [pendingVisits, setPendingVisits] = useState<Visit[]>([]);
   const [doctors, setDoctors] = useState<User[]>([]);
   const [selectedMethod, setSelectedMethod] = useState<string>('All');
@@ -79,7 +80,6 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({
     fetchPayments(reqId);
     fetchPendingVisits(reqId);
   }, [
-    selectedMethod,
     selectedCollectorId,
     fromDate,
     toDate,
@@ -93,14 +93,13 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({
     setLoading(true);
     try {
       const data = await api.getPayments({
-        method: selectedMethod !== 'All' ? selectedMethod : undefined,
         receivedBy: effectiveDoctorFilter,
         fromDate: fromDate.trim() || undefined,
         toDate: toDate.trim() || undefined,
         search: debouncedSearch.trim() || undefined,
       });
       if (reqId === undefined || reqId === requestCounterRef.current) {
-        setPayments(data);
+        setAllPayments(data);
       }
     } catch (e) {
       console.error('Failed to load payments:', e);
@@ -155,17 +154,35 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({
     Boolean(fromDate) ||
     Boolean(toDate);
 
-  const totalCollected = payments.reduce((sum, p) => sum + parseFloat(p.amount || '0'), 0);
+  // Filter displayed ledger rows by selectedMethod
+  const payments = allPayments.filter((p) => {
+    if (selectedMethod === 'All') return true;
+    if (selectedMethod === 'Other_Group') {
+      return p.paymentMethod !== 'Cash' && p.paymentMethod !== 'bKash';
+    }
+    return p.paymentMethod === selectedMethod;
+  });
+
+  // Overall Financial Totals across current scope
+  const totalCollected = allPayments.reduce((sum, p) => sum + parseFloat(p.amount || '0'), 0);
   const totalOutstandingClinicDue = pendingVisits.reduce(
     (sum, v) => sum + parseFloat(v.outstandingDue || '0'),
     0
   );
+  const totalBill = Number((totalCollected + totalOutstandingClinicDue).toFixed(2));
+  const collectedPct = totalBill > 0 ? Math.min(100, Math.round((totalCollected / totalBill) * 100)) : 100;
 
-  // Group by method
-  const methodTotals: Record<string, number> = {};
-  for (const p of payments) {
-    methodTotals[p.paymentMethod] = (methodTotals[p.paymentMethod] || 0) + parseFloat(p.amount || '0');
-  }
+  // Breakdown by Cash, bKash, and Other (Nagad, Bank transfer, Rocket, Card, Other)
+  const cashPayments = allPayments.filter((p) => p.paymentMethod === 'Cash');
+  const cashTotal = cashPayments.reduce((sum, p) => sum + parseFloat(p.amount || '0'), 0);
+
+  const bkashPayments = allPayments.filter((p) => p.paymentMethod === 'bKash');
+  const bkashTotal = bkashPayments.reduce((sum, p) => sum + parseFloat(p.amount || '0'), 0);
+
+  const otherPayments = allPayments.filter(
+    (p) => p.paymentMethod !== 'Cash' && p.paymentMethod !== 'bKash'
+  );
+  const otherTotal = otherPayments.reduce((sum, p) => sum + parseFloat(p.amount || '0'), 0);
 
   const getMethodBadgeStyle = (method: string) => {
     switch (method) {
@@ -201,7 +218,7 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
             {canFilterAllDoctors
-              ? 'Full clinic-wide installment tracking, per-doctor collector filtering, mobile banking references, and outstanding dues.'
+              ? 'Full clinic-wide installment tracking, total bill summary, per-doctor collector filtering, mobile banking references, and outstanding dues.'
               : `Scoped to ${user?.fullName || 'your account'}: you can view and filter only your own collected payments and pending patient dues.`}
           </p>
         </div>
@@ -213,7 +230,9 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({
               const params = new URLSearchParams();
               if (fromDate.trim()) params.set('fromDate', fromDate.trim());
               if (toDate.trim()) params.set('toDate', toDate.trim());
-              if (selectedMethod !== 'All') params.set('method', selectedMethod);
+              if (selectedMethod !== 'All' && selectedMethod !== 'Other_Group') {
+                params.set('method', selectedMethod);
+              }
               if (effectiveDoctorFilter) params.set('receivedBy', effectiveDoctorFilter);
               const qs = params.toString() ? `?${params.toString()}` : '';
               api.downloadCsv(`/api/export/payments.csv${qs}`, 'dental_payments.csv');
@@ -226,23 +245,48 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
+      {/* Summary Cards: Total Bill, Total Collected, Outstanding Dues, Cash, bKash, Other */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+        {/* 1. Total Bill */}
         <div
-          onClick={() => setActiveView('ledger')}
-          className={`p-3.5 rounded-xl border cursor-pointer transition-all col-span-2 sm:col-span-1 ${
-            activeView === 'ledger'
+          onClick={() => {
+            setActiveView('ledger');
+            setSelectedMethod('All');
+          }}
+          className="p-3.5 rounded-xl border border-teal-200 bg-teal-50/40 hover:bg-teal-50/80 cursor-pointer transition-all"
+          title="Total Net Bill = Total Collected + Outstanding Dues"
+        >
+          <span className="text-teal-900 block mb-0.5 font-semibold">Total Bill</span>
+          <span className="text-xl font-extrabold text-slate-900 font-mono">
+            ৳{totalBill.toLocaleString()}
+          </span>
+          <span className="text-[11px] text-teal-800 block mt-0.5 font-medium">
+            Collected + Due ({collectedPct}% paid)
+          </span>
+        </div>
+
+        {/* 2. Total Collected */}
+        <div
+          onClick={() => {
+            setActiveView('ledger');
+            setSelectedMethod('All');
+          }}
+          className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+            activeView === 'ledger' && selectedMethod === 'All'
               ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-200'
               : 'bg-white hover:bg-emerald-50/40 border-slate-200'
           }`}
         >
           <span className="text-slate-500 block mb-0.5 font-semibold">Total Collected</span>
-          <span className="text-xl font-extrabold text-emerald-700">
+          <span className="text-xl font-extrabold text-emerald-700 font-mono">
             ৳{totalCollected.toLocaleString()}
           </span>
-          <span className="text-[11px] text-slate-500 block mt-0.5">{payments.length} receipt(s)</span>
+          <span className="text-[11px] text-slate-500 block mt-0.5">
+            {allPayments.length} receipt(s)
+          </span>
         </div>
 
+        {/* 3. Outstanding Dues */}
         <div
           onClick={() => setActiveView('pending')}
           className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
@@ -252,7 +296,7 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({
           }`}
         >
           <span className="text-slate-500 block mb-0.5 font-semibold">Outstanding Dues</span>
-          <span className="text-base font-extrabold text-amber-800">
+          <span className="text-xl font-extrabold text-amber-800 font-mono">
             ৳{totalOutstandingClinicDue.toLocaleString()}
           </span>
           <span className="text-[11px] text-amber-700 block mt-0.5 font-bold">
@@ -260,17 +304,71 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({
           </span>
         </div>
 
-        {['Cash', 'bKash', 'Nagad'].map((m) => (
-          <div key={m} className="bg-white p-3.5 rounded-xl border border-slate-200">
-            <span className="text-slate-500 block mb-0.5">{m} Collections</span>
-            <span className="text-base font-bold text-slate-900">
-              ৳{(methodTotals[m] || 0).toLocaleString()}
-            </span>
-            <span className="text-[10px] text-slate-400 block mt-0.5">
-              {payments.filter((p) => p.paymentMethod === m).length} txns
-            </span>
-          </div>
-        ))}
+        {/* 4. Cash Collection */}
+        <div
+          onClick={() => {
+            setActiveView('ledger');
+            setSelectedMethod((prev) => (prev === 'Cash' ? 'All' : 'Cash'));
+          }}
+          className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+            activeView === 'ledger' && selectedMethod === 'Cash'
+              ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-200'
+              : 'bg-white hover:bg-slate-50 border-slate-200'
+          }`}
+          title="Click to filter Cash collections"
+        >
+          <span className="text-slate-500 block mb-0.5 font-semibold">Cash Collection</span>
+          <span className="text-base font-extrabold text-slate-900 font-mono">
+            ৳{cashTotal.toLocaleString()}
+          </span>
+          <span className="text-[10px] text-slate-500 block mt-0.5">
+            {cashPayments.length} txn(s)
+          </span>
+        </div>
+
+        {/* 5. bKash Collection */}
+        <div
+          onClick={() => {
+            setActiveView('ledger');
+            setSelectedMethod((prev) => (prev === 'bKash' ? 'All' : 'bKash'));
+          }}
+          className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+            activeView === 'ledger' && selectedMethod === 'bKash'
+              ? 'bg-pink-50 border-pink-400 ring-2 ring-pink-200'
+              : 'bg-white hover:bg-pink-50/30 border-slate-200'
+          }`}
+          title="Click to filter bKash collections"
+        >
+          <span className="text-slate-500 block mb-0.5 font-semibold">bKash Collection</span>
+          <span className="text-base font-extrabold text-pink-700 font-mono">
+            ৳{bkashTotal.toLocaleString()}
+          </span>
+          <span className="text-[10px] text-slate-500 block mt-0.5">
+            {bkashPayments.length} txn(s)
+          </span>
+        </div>
+
+        {/* 6. Other Collection (Nagad, Bank transfer, Card, Other) */}
+        <div
+          onClick={() => {
+            setActiveView('ledger');
+            setSelectedMethod((prev) => (prev === 'Other_Group' ? 'All' : 'Other_Group'));
+          }}
+          className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+            activeView === 'ledger' && selectedMethod === 'Other_Group'
+              ? 'bg-indigo-50 border-indigo-400 ring-2 ring-indigo-200'
+              : 'bg-white hover:bg-indigo-50/30 border-slate-200'
+          }`}
+          title="Nagad, Bank transfer, Card / POS, and Other payment methods"
+        >
+          <span className="text-slate-500 block mb-0.5 font-semibold">Other Collection</span>
+          <span className="text-base font-extrabold text-indigo-800 font-mono">
+            ৳{otherTotal.toLocaleString()}
+          </span>
+          <span className="text-[10px] text-slate-500 block mt-0.5 truncate">
+            {otherPayments.length} txn(s) (Nagad/Bank/Etc.)
+          </span>
+        </div>
       </div>
 
       {/* Unified Filter Bar for Both Views */}
@@ -329,6 +427,7 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({
               <option value="All">All Payment Methods</option>
               <option value="Cash">Cash</option>
               <option value="bKash">bKash</option>
+              <option value="Other_Group">Other (Nagad / Bank / Etc.)</option>
               <option value="Nagad">Nagad</option>
               <option value="Bank transfer">Bank transfer</option>
               <option value="Other">Other</option>
@@ -486,7 +585,7 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({
                             </div>
                           </td>
                           <td className="py-3.5 px-4 text-slate-800">{v.doctorName}</td>
-                          <td className="py-3.5 px-4 text-slate-600 whitespace-nowrap">{v.visitDate}</td>
+                          <td className="py-3.5 px-4 text-slate-600 whitespace-nowrap">{formatDateDDMMYYYY(v.visitDate)}</td>
                           <td className="py-3.5 px-4 text-right whitespace-nowrap">
                             <div className="font-bold text-slate-900 font-mono">
                               ৳{parseFloat(v.totalCost || '0').toLocaleString()}
@@ -597,7 +696,7 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({
                           {p.visitCode}
                         </td>
                         <td className="py-3.5 px-4 text-slate-600 whitespace-nowrap">
-                          {p.paymentDate}
+                          {formatDateDDMMYYYY(p.paymentDate)}
                         </td>
                         <td className="py-3.5 px-4">
                           <div className="flex items-center gap-1.5">

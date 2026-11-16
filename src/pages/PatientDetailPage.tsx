@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { UndoPaymentConfirmModal, UndoPaymentTarget } from '../components/UndoPaymentConfirmModal.tsx';
 import { PatientPrescriptionHistory } from '../components/PatientPrescriptionHistory.tsx';
+import { formatDateDDMMYYYY } from '../utils/dateFormat.ts';
 
 interface PatientDetailPageProps {
   patientId: number;
@@ -286,7 +287,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                 {latestVisit.visitId} (Latest Visit #{profile.visits.length} of {profile.visits.length})
               </span>
               <span className="text-xs text-slate-500 font-medium">
-                Date: <strong>{latestVisit.visitDate}</strong>
+                Date: <strong>{formatDateDDMMYYYY(latestVisit.visitDate)}</strong>
               </span>
               <span className="inline-flex items-center gap-1 text-xs text-slate-700 bg-slate-100 px-2 py-0.5 rounded">
                 <Stethoscope className="w-3 h-3 text-teal-600" />
@@ -518,7 +519,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                               </p>
                             )}
                             <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                              <span className="font-medium text-slate-600">{t.treatmentDate}</span>
+                              <span className="font-medium text-slate-600">{formatDateDDMMYYYY(t.treatmentDate)}</span>
                               <span>&middot;</span>
                               <span className="text-teal-700 font-medium">{t.doctorName}</span>
                             </div>
@@ -620,7 +621,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                               </p>
                             )}
                             <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                              <span className="font-medium text-slate-600">{t.testDate}</span>
+                              <span className="font-medium text-slate-600">{formatDateDDMMYYYY(t.testDate)}</span>
                               <span>&middot;</span>
                               <span className="text-cyan-700 font-medium">{t.doctorName}</span>
                             </div>
@@ -742,7 +743,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
               )}
               <span className="flex items-center gap-1">
                 <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                <span>Registered: {profile.registrationDate}</span>
+                <span>Registered: {formatDateDDMMYYYY(profile.registrationDate)}</span>
               </span>
             </div>
           </div>
@@ -957,7 +958,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                   </div>
                   <div>
                     <span className="text-slate-500 block">Registration Date:</span>
-                    <span>{profile.registrationDate}</span>
+                    <span>{formatDateDDMMYYYY(profile.registrationDate)}</span>
                   </div>
                   <div>
                     <span className="text-slate-500 block">Full Name:</span>
@@ -1126,7 +1127,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                             {v.visitId}
                           </span>
                           <span className="text-xs text-slate-500 font-medium">
-                            {v.visitDate} {v.visitTime ? `at ${v.visitTime}` : ''}
+                            {formatDateDDMMYYYY(v.visitDate)} {v.visitTime ? `at ${v.visitTime}` : ''}
                           </span>
                           <span className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-800 px-2 py-0.5 rounded bg-white border border-slate-200">
                             <Stethoscope className="w-3.5 h-3.5 text-teal-600" />
@@ -1430,7 +1431,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                                         - Received{' '}
                                         <strong className="text-emerald-700">+৳{parseFloat(p.amount).toLocaleString()}</strong> via{' '}
                                         <span className="font-semibold text-slate-800">{p.paymentMethod}</span>{' '}
-                                        on {p.paymentDate}
+                                        on {formatDateDDMMYYYY(p.paymentDate)}
                                       </span>
                                       {p.transactionRef && (
                                         <span className="text-slate-500 font-mono">(Trx: {p.transactionRef})</span>
@@ -1492,7 +1493,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                           <div className="flex flex-wrap items-center justify-between text-[11px] pt-2 border-t border-slate-100 text-slate-600">
                             {v.nextFollowUpDate && (
                               <span>
-                                <strong>Next Follow-up Scheduled:</strong> {v.nextFollowUpDate}
+                                <strong>Next Follow-up Scheduled:</strong> {formatDateDDMMYYYY(v.nextFollowUpDate)}
                               </span>
                             )}
                             {v.notes && (
@@ -1537,8 +1538,8 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                   const docTreatments = profile.treatments.filter((t) => t.doctorId === doc.id);
                   const docTests = profile.diagnosticTests.filter((t) => t.doctorId === doc.id);
                   const sortedDates = docVisits.map((v) => v.visitDate).sort();
-                  const firstVisitDate = sortedDates[0] || '-';
-                  const lastVisitDate = sortedDates[sortedDates.length - 1] || '-';
+                  const firstVisitDate = sortedDates[0] ? formatDateDDMMYYYY(sortedDates[0]) : '-';
+                  const lastVisitDate = sortedDates[sortedDates.length - 1] ? formatDateDDMMYYYY(sortedDates[sortedDates.length - 1]) : '-';
 
                   return (
                     <div
@@ -1592,7 +1593,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                               >
                                 <strong className="font-mono text-teal-800">{dv.visitId}</strong>
                                 <span className="text-slate-400">&bull;</span>
-                                <span>{dv.visitDate}</span>
+                                <span>{formatDateDDMMYYYY(dv.visitDate)}</span>
                                 {dv.diagnosis && (
                                   <span className="text-slate-500 truncate max-w-[140px]">
                                     ({dv.diagnosis})
@@ -1620,8 +1621,8 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                   Permanent Medical &amp; Dental History
                 </h3>
                 <p className="text-slate-500">
-                  Registered: <strong className="text-slate-700">{profile.registrationDate}</strong> &bull; Last Visit:{' '}
-                  <strong className="text-slate-700">{profile.stats.lastVisitDate || 'No visits yet'}</strong>
+                  Registered: <strong className="text-slate-700">{formatDateDDMMYYYY(profile.registrationDate)}</strong> &bull; Last Visit:{' '}
+                  <strong className="text-slate-700">{profile.stats.lastVisitDate ? formatDateDDMMYYYY(profile.stats.lastVisitDate) : 'No visits yet'}</strong>
                 </p>
               </div>
               <button
@@ -1726,7 +1727,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                         return (
                           <tr key={t.id} className="hover:bg-slate-50/80">
                             <td className="py-3 px-4 text-slate-600 whitespace-nowrap font-medium">
-                              {t.treatmentDate}
+                              {formatDateDDMMYYYY(t.treatmentDate)}
                             </td>
                             <td className="py-3 px-4 whitespace-nowrap">
                               <span className="font-mono font-bold text-teal-800 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200 text-[11px]">
@@ -1833,7 +1834,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                         return (
                           <tr key={t.id} className="hover:bg-slate-50/80">
                             <td className="py-3 px-4 text-slate-600 whitespace-nowrap font-medium">
-                              {t.testDate}
+                              {formatDateDDMMYYYY(t.testDate)}
                             </td>
                             <td className="py-3 px-4 whitespace-nowrap">
                               <span className="font-mono font-bold text-cyan-800 bg-cyan-50 px-1.5 py-0.5 rounded border border-cyan-200 text-[11px]">
@@ -2060,7 +2061,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                                   )}
                                 </div>
                                 <div className="text-[11px] font-medium text-slate-700 mt-1">
-                                  {v.visitDate}
+                                  {formatDateDDMMYYYY(v.visitDate)}
                                   {v.visitTime ? ` • ${v.visitTime}` : ''}
                                 </div>
                                 <div className="text-[11px] text-teal-700 font-medium">
@@ -2141,7 +2142,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                                   <div className="mt-1 space-y-0.5 text-[10px] text-slate-500">
                                     {vPayments.map((vp) => (
                                       <div key={vp.id} className="whitespace-nowrap">
-                                        {vp.paymentDate}:{' '}
+                                        {formatDateDDMMYYYY(vp.paymentDate)}:{' '}
                                         <strong className="font-mono text-emerald-700">
                                           +৳{parseFloat(vp.amount).toLocaleString()}
                                         </strong>{' '}
@@ -2281,10 +2282,10 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                               </div>
                             </td>
                             <td className="py-3 px-4 text-slate-700 whitespace-nowrap font-semibold">
-                              <div>{p.paymentDate}</div>
+                              <div>{formatDateDDMMYYYY(p.paymentDate)}</div>
                               {matchVisit?.visitDate && matchVisit.visitDate !== p.paymentDate && (
                                 <div className="text-[10px] font-normal text-slate-400">
-                                  Visit: {matchVisit.visitDate}
+                                  Visit: {formatDateDDMMYYYY(matchVisit.visitDate)}
                                 </div>
                               )}
                             </td>
@@ -2450,7 +2451,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                               Latest Visit
                             </span>
                           )}
-                          <span className="text-slate-500 font-medium">{v.visitDate}</span>
+                          <span className="text-slate-500 font-medium">{formatDateDDMMYYYY(v.visitDate)}</span>
                           <span className="text-slate-700 font-semibold truncate max-w-[120px]">&bull; {v.doctorName}</span>
                         </div>
 
@@ -2595,7 +2596,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                         <div className="space-y-1">
                           <div className="font-bold text-slate-900 text-sm flex flex-wrap items-center gap-2">
                             <Clock className="w-4 h-4 text-teal-600" />
-                            <span>{a.followUpDate}</span>
+                            <span>{formatDateDDMMYYYY(a.followUpDate)}</span>
                             {linkedVisit && (
                               <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-white border border-slate-200 text-teal-800">
                                 {linkedVisit.visitId}
@@ -2654,14 +2655,14 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                             {v.visitId}
                           </span>
                           <span className="font-semibold text-slate-700">
-                            {v.visitDate}
+                            {formatDateDDMMYYYY(v.visitDate)}
                             {v.visitTime ? ` at ${v.visitTime}` : ''}
                           </span>
                           <span className="text-teal-700 font-medium">&bull; {v.doctorName}</span>
                         </div>
                         {v.nextFollowUpDate && (
                           <span className="text-[11px] font-semibold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
-                            Next Review: {v.nextFollowUpDate}
+                            Next Review: {formatDateDDMMYYYY(v.nextFollowUpDate)}
                           </span>
                         )}
                       </div>

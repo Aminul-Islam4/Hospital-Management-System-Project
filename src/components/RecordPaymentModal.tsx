@@ -3,6 +3,7 @@ import { api } from '../services/api.ts';
 import { useAuth } from '../context/AuthContext.tsx';
 import { User } from '../types/index.ts';
 import { UndoPaymentConfirmModal, UndoPaymentTarget } from './UndoPaymentConfirmModal.tsx';
+import { formatDateDDMMYYYY } from '../utils/dateFormat.ts';
 import {
   X,
   CreditCard,
@@ -510,7 +511,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                   </span>
                   {currentVisitDate && (
                     <span className="text-[11px] text-slate-300 font-medium">
-                      ({currentVisitDate})
+                      ({formatDateDDMMYYYY(currentVisitDate)})
                     </span>
                   )}
                 </div>
@@ -1323,7 +1324,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                                 </div>
 
                                 <div className="text-[11px] text-slate-500 flex items-center gap-2 flex-wrap">
-                                  <span>Date: <strong className="text-slate-700">{p.paymentDate}</strong></span>
+                                  <span>Date: <strong className="text-slate-700">{formatDateDDMMYYYY(p.paymentDate)}</strong></span>
                                   <span>&middot;</span>
                                   <span>Collected by: <strong className="text-teal-800">{p.receiverName || 'Clinic Doctor'}</strong></span>
                                   {p.transactionRef && (

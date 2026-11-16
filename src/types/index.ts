@@ -567,3 +567,54 @@ export interface Prescription {
   }[];
   auditLogs?: PrescriptionAuditLog[];
 }
+
+export type DoctorSalaryType = 'Monthly' | 'Daily' | 'Commission';
+export type DoctorSalaryStatus = 'Paid' | 'Partial' | 'Pending';
+
+export interface DoctorSalary {
+  id: number;
+  salaryCode: string;
+  doctorId: number;
+  doctorName?: string;
+  doctorSpecialization?: string | null;
+  doctorPhone?: string | null;
+  doctorRole?: string;
+  salaryType: DoctorSalaryType;
+  periodLabel: string;
+  periodStart?: string | null;
+  periodEnd?: string | null;
+  baseAmount: string;
+  daysWorked: number;
+  commissionBasis?: 'collected' | 'billed' | 'custom' | null;
+  commissionSourceAmount: string;
+  commissionRate: string;
+  commissionEarned: string;
+  bonusAmount: string;
+  deductionAmount: string;
+  totalPayable: string;
+  paidAmount: string;
+  dueAmount: string;
+  paymentStatus: DoctorSalaryStatus;
+  paymentMethod: 'Cash' | 'bKash' | 'Nagad' | 'Bank transfer' | 'Other';
+  transactionRef?: string | null;
+  paymentDate: string;
+  notes?: string | null;
+  recordedBy?: number | null;
+  recordedByName?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface DoctorSalaryMetrics {
+  doctorId: number;
+  doctorName: string;
+  fromDate?: string | null;
+  toDate?: string | null;
+  visitCount: number;
+  uniqueDaysWorked: number;
+  totalTreatmentBill: number;
+  totalVisitBill: number;
+  totalCollectedByDoctor: number;
+  totalCollectedForDoctorVisits: number;
+}
+

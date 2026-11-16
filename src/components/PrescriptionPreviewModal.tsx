@@ -6,7 +6,9 @@ import {
   BANGLA_CARE_CATEGORIES,
   downloadPrescriptionPdf,
   formatBanglaDate,
+  printPrescription,
 } from '../utils/prescriptionPdf.ts';
+import { formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../utils/dateFormat.ts';
 import {
   X,
   Printer,
@@ -108,25 +110,15 @@ export const PrescriptionPreviewModal: React.FC<PrescriptionPreviewModalProps> =
     }
   };
 
-  const handlePrint = async () => {
+  const handlePrint = () => {
     if (!rx) return;
+    setError(null);
     try {
-      await api.logPrescriptionExport(rx.id, 'print');
+      printPrescription(rx);
+      setActionFeedback(`Prepared print layout for ${rx.prescriptionNumber}.`);
     } catch (err: any) {
-      setError(err.message || 'Feature disabled or unauthorized for printing.');
-      return;
+      setError(err.message || 'Unable to print prescription.');
     }
-
-    document.body.classList.add('printing-prescription');
-    const cleanup = () => {
-      document.body.classList.remove('printing-prescription');
-      window.removeEventListener('afterprint', cleanup);
-    };
-    window.addEventListener('afterprint', cleanup);
-    setTimeout(() => {
-      window.print();
-      setTimeout(cleanup, 1200);
-    }, 80);
   };
 
   const handleFinalize = async () => {
@@ -250,10 +242,7 @@ export const PrescriptionPreviewModal: React.FC<PrescriptionPreviewModalProps> =
   const anyTestCost = advisedTestItems.some((item) => hasValidCost(item.cost));
 
   const formatRxDateDisplay = (isoDate?: string | null): string => {
-    if (!isoDate) return '-';
-    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(isoDate.trim());
-    if (!m) return isoDate;
-    return `${m[3]}/${m[2]}/${m[1]}`;
+    return formatDateDDMMYYYY(isoDate, '-');
   };
 
   const toBulletLines = (raw?: string | null): string[] => {
@@ -556,7 +545,7 @@ export const PrescriptionPreviewModal: React.FC<PrescriptionPreviewModalProps> =
                   </option>
                   {patientVisits.map((v) => (
                     <option key={v.id} value={v.id}>
-                      {v.visitId} &bull; {v.visitDate} &bull; {v.doctorName} ({v.diagnosis || 'Consultation'})
+                      {v.visitId} &bull; {formatDateDDMMYYYY(v.visitDate)} &bull; {v.doctorName} ({v.diagnosis || 'Consultation'})
                     </option>
                   ))}
                 </select>
@@ -883,7 +872,7 @@ export const PrescriptionPreviewModal: React.FC<PrescriptionPreviewModalProps> =
                               <Clock className="w-3.5 h-3.5 text-teal-700 shrink-0" />
                               <span>
                                 পরবর্তী সাক্ষাতের তারিখ: {formatBanglaDate(rx.followUpDate)} (
-                                {rx.followUpDate})
+                                {formatRxDateDisplay(rx.followUpDate)})
                               </span>
                             </div>
                           )}
@@ -1008,7 +997,7 @@ export const PrescriptionPreviewModal: React.FC<PrescriptionPreviewModalProps> =
                               </span>
                             </div>
                             <span className="text-[11px] text-slate-500">
-                              {rev.createdByName} &bull; {new Date(rev.createdAt).toLocaleString()}
+                              {rev.createdByName} &bull; {formatDateTimeDDMMYYYY(rev.createdAt)}
                             </span>
                           </div>
                         ))}
@@ -1034,7 +1023,7 @@ export const PrescriptionPreviewModal: React.FC<PrescriptionPreviewModalProps> =
                               </div>
                               <span className="text-[11px] text-slate-500 whitespace-nowrap">
                                 {log.userName || log.userRole} &bull;{' '}
-                                {new Date(log.createdAt).toLocaleString()}
+                                {formatDateTimeDDMMYYYY(log.createdAt)}
                               </span>
                             </div>
                           ))}

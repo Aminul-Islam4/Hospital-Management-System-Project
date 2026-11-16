@@ -23,6 +23,8 @@ import {
   MedicineAuditLog,
   MedicineDetailResponse,
   DoctorClinicalHeading,
+  DoctorSalary,
+  DoctorSalaryMetrics,
 } from '../types/index.ts';
 
 const TOKEN_KEY = 'dental_clinic_auth_token';
@@ -656,5 +658,56 @@ export const api = {
     }>(`/api/medicines/admin/rollback/${snapshotId}`, {
       method: 'POST',
     }),
+
+  // Doctor Salary Sheet (Main Doctor / Admin)
+  getDoctorSalaries: (
+    params: {
+      doctorId?: number | string;
+      salaryType?: string;
+      paymentStatus?: string;
+      fromDate?: string;
+      toDate?: string;
+      search?: string;
+    } = {}
+  ) => {
+    const q = new URLSearchParams();
+    if (params.doctorId && params.doctorId !== 'All') q.append('doctorId', String(params.doctorId));
+    if (params.salaryType && params.salaryType !== 'All') q.append('salaryType', params.salaryType);
+    if (params.paymentStatus && params.paymentStatus !== 'All')
+      q.append('paymentStatus', params.paymentStatus);
+    if (params.fromDate) q.append('fromDate', params.fromDate);
+    if (params.toDate) q.append('toDate', params.toDate);
+    if (params.search) q.append('search', params.search);
+    return request<DoctorSalary[]>(`/api/doctor-salaries?${q.toString()}`);
+  },
+
+  getDoctorSalaryMetrics: (params: {
+    doctorId: number;
+    fromDate?: string;
+    toDate?: string;
+  }) => {
+    const q = new URLSearchParams({ doctorId: String(params.doctorId) });
+    if (params.fromDate) q.append('fromDate', params.fromDate);
+    if (params.toDate) q.append('toDate', params.toDate);
+    return request<DoctorSalaryMetrics>(`/api/doctor-salaries/doctor-metrics?${q.toString()}`);
+  },
+
+  createDoctorSalary: (data: Partial<DoctorSalary>) =>
+    request<DoctorSalary>('/api/doctor-salaries', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updateDoctorSalary: (id: number, data: Partial<DoctorSalary>) =>
+    request<DoctorSalary>(`/api/doctor-salaries/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  deleteDoctorSalary: (id: number) =>
+    request<{ success: boolean }>(`/api/doctor-salaries/${id}`, {
+      method: 'DELETE',
+    }),
 };
+
 

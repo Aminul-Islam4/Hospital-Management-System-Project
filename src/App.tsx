@@ -10,6 +10,7 @@ import { VisitsPage } from './pages/VisitsPage.tsx';
 import { PaymentsPage } from './pages/PaymentsPage.tsx';
 import { FollowUpsPage } from './pages/FollowUpsPage.tsx';
 import { DoctorsPage } from './pages/DoctorsPage.tsx';
+import { SalarySheetPage } from './pages/SalarySheetPage.tsx';
 import { ExportsPage } from './pages/ExportsPage.tsx';
 import { AuditLogsPage } from './pages/AuditLogsPage.tsx';
 import { SettingsPage } from './pages/SettingsPage.tsx';
@@ -305,6 +306,8 @@ function AppContent() {
             {currentTab === 'doctors' && (
               <DoctorsPage refreshKey={refreshKey} onOpenDoctorModal={handleOpenDoctorModal} />
             )}
+
+            {currentTab === 'salary-sheet' && <SalarySheetPage key={refreshKey} />}
 
             {currentTab === 'exports' && <ExportsPage />}
 

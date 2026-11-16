@@ -16,6 +16,7 @@ import {
   prescriptionMedicines,
   prescriptionRevisions,
   prescriptionAuditLogs,
+  doctorSalaries,
 } from '../db/schema.ts';
 import {
   authenticateToken,
@@ -4340,3 +4341,437 @@ apiRouter.get(
     }
   }
 );
+
+// ==========================================
+// 14. DOCTOR SALARY SHEET (Main Doctor & Super Admin)
+// ==========================================
+
+apiRouter.get(
+  '/doctor-salaries/doctor-metrics',
+  authenticateToken,
+  requireRoles('main_doctor', 'developer'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const doctorId = parseInt(String(req.query.doctorId || '0'), 10);
+      if (!doctorId) {
+        return res.status(400).json({ error: 'Valid doctorId is required' });
+      }
+      const fromDate = req.query.fromDate ? String(req.query.fromDate) : '';
+      const toDate = req.query.toDate ? String(req.query.toDate) : '';
+
+      const [doc] = await db.select().from(users).where(eq(users.id, doctorId));
+      if (!doc) {
+        return res.status(404).json({ error: 'Doctor not found' });
+      }
+
+      const doctorVisits = await db.select().from(visits).where(eq(visits.doctorId, doctorId));
+      const filteredVisits = doctorVisits.filter((v) => {
+        if (fromDate && v.visitDate < fromDate) return false;
+        if (toDate && v.visitDate > toDate) return false;
+        return true;
+      });
+
+      const visitIds = new Set(filteredVisits.map((v) => v.id));
+      const uniqueDates = new Set(filteredVisits.map((v) => v.visitDate));
+
+      const totalTreatmentBill = filteredVisits.reduce(
+        (sum, v) => sum + (parseFloat(String(v.totalTreatmentCost || '0')) || 0),
+        0
+      );
+      const totalVisitBill = filteredVisits.reduce(
+        (sum, v) => sum + (parseFloat(String(v.totalCost || '0')) || 0),
+        0
+      );
+
+      const allPayments = await db.select().from(payments);
+      const paymentsInPeriod = allPayments.filter((p) => {
+        if (fromDate && p.paymentDate < fromDate) return false;
+        if (toDate && p.paymentDate > toDate) return false;
+        return true;
+      });
+
+      const totalCollectedByDoctor = paymentsInPeriod
+        .filter((p) => p.receivedBy === doctorId)
+        .reduce((sum, p) => sum + (parseFloat(String(p.amount || '0')) || 0), 0);
+
+      const totalCollectedForDoctorVisits = paymentsInPeriod
+        .filter((p) => visitIds.has(p.visitId))
+        .reduce((sum, p) => sum + (parseFloat(String(p.amount || '0')) || 0), 0);
+
+      res.json({
+        doctorId: doc.id,
+        doctorName: doc.fullName,
+        fromDate: fromDate || null,
+        toDate: toDate || null,
+        visitCount: filteredVisits.length,
+        uniqueDaysWorked: uniqueDates.size,
+        totalTreatmentBill: Number(totalTreatmentBill.toFixed(2)),
+        totalVisitBill: Number(totalVisitBill.toFixed(2)),
+        totalCollectedByDoctor: Number(totalCollectedByDoctor.toFixed(2)),
+        totalCollectedForDoctorVisits: Number(totalCollectedForDoctorVisits.toFixed(2)),
+      });
+    } catch (error: any) {
+      console.error('Error calculating doctor salary metrics:', error);
+      res.status(500).json({ error: 'Failed to calculate doctor metrics' });
+    }
+  }
+);
+
+apiRouter.get(
+  '/doctor-salaries',
+  authenticateToken,
+  requireRoles('main_doctor', 'developer'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const { doctorId, salaryType, paymentStatus, fromDate, toDate, search } = req.query;
+
+      const allSalaries = await db
+        .select()
+        .from(doctorSalaries)
+        .orderBy(desc(doctorSalaries.paymentDate), desc(doctorSalaries.id));
+
+      const allDoctors = await db.select().from(users);
+      const doctorMap = new Map(allDoctors.map((d) => [d.id, d]));
+
+      let result = allSalaries.map((s) => {
+        const doc = doctorMap.get(s.doctorId);
+        const rec = s.recordedBy ? doctorMap.get(s.recordedBy) : null;
+        return {
+          ...s,
+          doctorName: doc?.fullName || `Doctor #${s.doctorId}`,
+          doctorSpecialization: doc?.specialization || null,
+          doctorPhone: doc?.phone || null,
+          doctorRole: doc?.role || 'doctor',
+          recordedByName: rec?.fullName || 'Main Doctor',
+        };
+      });
+
+      if (doctorId && doctorId !== 'All') {
+        const dId = parseInt(String(doctorId), 10);
+        if (!isNaN(dId)) {
+          result = result.filter((r) => r.doctorId === dId);
+        }
+      }
+
+      if (salaryType && salaryType !== 'All') {
+        result = result.filter((r) => r.salaryType === String(salaryType));
+      }
+
+      if (paymentStatus && paymentStatus !== 'All') {
+        result = result.filter((r) => r.paymentStatus === String(paymentStatus));
+      }
+
+      if (fromDate) {
+        const f = String(fromDate);
+        result = result.filter((r) => r.paymentDate >= f);
+      }
+
+      if (toDate) {
+        const t = String(toDate);
+        result = result.filter((r) => r.paymentDate <= t);
+      }
+
+      if (search && String(search).trim()) {
+        const q = String(search).trim().toLowerCase();
+        result = result.filter(
+          (r) =>
+            r.salaryCode.toLowerCase().includes(q) ||
+            (r.doctorName || '').toLowerCase().includes(q) ||
+            (r.periodLabel || '').toLowerCase().includes(q) ||
+            (r.notes || '').toLowerCase().includes(q) ||
+            (r.transactionRef || '').toLowerCase().includes(q)
+        );
+      }
+
+      res.json(result);
+    } catch (error: any) {
+      console.error('Error fetching doctor salaries:', error);
+      res.status(500).json({ error: 'Failed to load doctor salary sheet' });
+    }
+  }
+);
+
+apiRouter.post(
+  '/doctor-salaries',
+  authenticateToken,
+  requireRoles('main_doctor', 'developer'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const {
+        doctorId,
+        salaryType = 'Monthly',
+        periodLabel,
+        periodStart,
+        periodEnd,
+        baseAmount = 0,
+        daysWorked = 0,
+        commissionBasis = 'collected',
+        commissionSourceAmount = 0,
+        commissionRate = 0,
+        bonusAmount = 0,
+        deductionAmount = 0,
+        paidAmount = 0,
+        paymentMethod = 'Cash',
+        transactionRef,
+        paymentDate,
+        notes,
+      } = req.body;
+
+      const dId = parseInt(String(doctorId), 10);
+      if (!dId || isNaN(dId)) {
+        return res.status(400).json({ error: 'Please select a doctor.' });
+      }
+      if (!periodLabel || !String(periodLabel).trim()) {
+        return res.status(400).json({ error: 'Period / Month label is required.' });
+      }
+
+      const [doc] = await db.select().from(users).where(eq(users.id, dId));
+      if (!doc) {
+        return res.status(404).json({ error: 'Selected doctor not found.' });
+      }
+
+      const base = Math.max(0, parseFloat(String(baseAmount)) || 0);
+      const days = Math.max(0, parseInt(String(daysWorked), 10) || 0);
+      const commSource = Math.max(0, parseFloat(String(commissionSourceAmount)) || 0);
+      const commRate = Math.max(0, parseFloat(String(commissionRate)) || 0);
+      const bonus = Math.max(0, parseFloat(String(bonusAmount)) || 0);
+      const deduction = Math.max(0, parseFloat(String(deductionAmount)) || 0);
+
+      let coreSalary = 0;
+      let commEarned = 0;
+      if (salaryType === 'Monthly') {
+        coreSalary = base;
+      } else if (salaryType === 'Daily') {
+        coreSalary = base * (days > 0 ? days : 1);
+      } else if (salaryType === 'Commission') {
+        commEarned = Number(((commSource * commRate) / 100).toFixed(2));
+        coreSalary = base + commEarned;
+      }
+
+      const totalPayableNum = Math.max(0, Number((coreSalary + bonus - deduction).toFixed(2)));
+      const paidNum = Math.max(0, Number((parseFloat(String(paidAmount)) || 0).toFixed(2)));
+      const dueNum = Math.max(0, Number((totalPayableNum - paidNum).toFixed(2)));
+
+      let paymentStatus: 'Paid' | 'Partial' | 'Pending' = 'Pending';
+      if (paidNum >= totalPayableNum && totalPayableNum > 0) {
+        paymentStatus = 'Paid';
+      } else if (paidNum > 0 && paidNum < totalPayableNum) {
+        paymentStatus = 'Partial';
+      } else if (totalPayableNum === 0) {
+        paymentStatus = 'Paid';
+      }
+
+      const existing = await db.select({ id: doctorSalaries.id }).from(doctorSalaries);
+      const maxId = existing.reduce((m, r) => Math.max(m, r.id), 0);
+      const salaryCode = `SAL-${1001 + maxId}`;
+
+      const [created] = await db
+        .insert(doctorSalaries)
+        .values({
+          salaryCode,
+          doctorId: dId,
+          salaryType: String(salaryType),
+          periodLabel: String(periodLabel).trim(),
+          periodStart: periodStart || null,
+          periodEnd: periodEnd || null,
+          baseAmount: base.toFixed(2),
+          daysWorked: days,
+          commissionBasis: commissionBasis || 'collected',
+          commissionSourceAmount: commSource.toFixed(2),
+          commissionRate: commRate.toFixed(2),
+          commissionEarned: commEarned.toFixed(2),
+          bonusAmount: bonus.toFixed(2),
+          deductionAmount: deduction.toFixed(2),
+          totalPayable: totalPayableNum.toFixed(2),
+          paidAmount: paidNum.toFixed(2),
+          dueAmount: dueNum.toFixed(2),
+          paymentStatus,
+          paymentMethod: paymentMethod || 'Cash',
+          transactionRef: transactionRef ? String(transactionRef).trim() : null,
+          paymentDate: paymentDate || new Date().toISOString().split('T')[0],
+          notes: notes ? String(notes).trim() : null,
+          recordedBy: req.user?.id || null,
+        })
+        .returning();
+
+      await logAudit(
+        req.user,
+        'CREATE_DOCTOR_SALARY',
+        `${salaryCode} (${doc.fullName})`,
+        `${salaryType} Salary for ${periodLabel}: Payable ৳${totalPayableNum}, Paid ৳${paidNum}, Due ৳${dueNum} via ${paymentMethod}`
+      );
+
+      res.status(201).json({
+        ...created,
+        doctorName: doc.fullName,
+        doctorSpecialization: doc.specialization,
+        doctorPhone: doc.phone,
+        recordedByName: req.user?.fullName || 'Main Doctor',
+      });
+    } catch (error: any) {
+      console.error('Error creating doctor salary:', error);
+      res.status(500).json({ error: error.message || 'Failed to save doctor salary record' });
+    }
+  }
+);
+
+apiRouter.put(
+  '/doctor-salaries/:id',
+  authenticateToken,
+  requireRoles('main_doctor', 'developer'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const [existing] = await db
+        .select()
+        .from(doctorSalaries)
+        .where(eq(doctorSalaries.id, id));
+
+      if (!existing) {
+        return res.status(404).json({ error: 'Salary record not found' });
+      }
+
+      const salaryType = req.body.salaryType ?? existing.salaryType;
+      const periodLabel = req.body.periodLabel ?? existing.periodLabel;
+      const periodStart = req.body.periodStart !== undefined ? req.body.periodStart : existing.periodStart;
+      const periodEnd = req.body.periodEnd !== undefined ? req.body.periodEnd : existing.periodEnd;
+      const base = Math.max(0, parseFloat(String(req.body.baseAmount ?? existing.baseAmount)) || 0);
+      const days = Math.max(0, parseInt(String(req.body.daysWorked ?? existing.daysWorked), 10) || 0);
+      const commissionBasis = req.body.commissionBasis ?? existing.commissionBasis ?? 'collected';
+      const commSource = Math.max(
+        0,
+        parseFloat(String(req.body.commissionSourceAmount ?? existing.commissionSourceAmount)) || 0
+      );
+      const commRate = Math.max(
+        0,
+        parseFloat(String(req.body.commissionRate ?? existing.commissionRate)) || 0
+      );
+      const bonus = Math.max(
+        0,
+        parseFloat(String(req.body.bonusAmount ?? existing.bonusAmount)) || 0
+      );
+      const deduction = Math.max(
+        0,
+        parseFloat(String(req.body.deductionAmount ?? existing.deductionAmount)) || 0
+      );
+
+      let coreSalary = 0;
+      let commEarned = 0;
+      if (salaryType === 'Monthly') {
+        coreSalary = base;
+      } else if (salaryType === 'Daily') {
+        coreSalary = base * (days > 0 ? days : 1);
+      } else if (salaryType === 'Commission') {
+        commEarned = Number(((commSource * commRate) / 100).toFixed(2));
+        coreSalary = base + commEarned;
+      }
+
+      const totalPayableNum = Math.max(0, Number((coreSalary + bonus - deduction).toFixed(2)));
+      const paidNum = Math.max(
+        0,
+        Number((parseFloat(String(req.body.paidAmount ?? existing.paidAmount)) || 0).toFixed(2))
+      );
+      const dueNum = Math.max(0, Number((totalPayableNum - paidNum).toFixed(2)));
+
+      let paymentStatus: 'Paid' | 'Partial' | 'Pending' = 'Pending';
+      if (paidNum >= totalPayableNum && totalPayableNum > 0) {
+        paymentStatus = 'Paid';
+      } else if (paidNum > 0 && paidNum < totalPayableNum) {
+        paymentStatus = 'Partial';
+      } else if (totalPayableNum === 0) {
+        paymentStatus = 'Paid';
+      }
+
+      const [updated] = await db
+        .update(doctorSalaries)
+        .set({
+          doctorId: req.body.doctorId ? parseInt(String(req.body.doctorId), 10) : existing.doctorId,
+          salaryType: String(salaryType),
+          periodLabel: String(periodLabel).trim(),
+          periodStart: periodStart || null,
+          periodEnd: periodEnd || null,
+          baseAmount: base.toFixed(2),
+          daysWorked: days,
+          commissionBasis,
+          commissionSourceAmount: commSource.toFixed(2),
+          commissionRate: commRate.toFixed(2),
+          commissionEarned: commEarned.toFixed(2),
+          bonusAmount: bonus.toFixed(2),
+          deductionAmount: deduction.toFixed(2),
+          totalPayable: totalPayableNum.toFixed(2),
+          paidAmount: paidNum.toFixed(2),
+          dueAmount: dueNum.toFixed(2),
+          paymentStatus,
+          paymentMethod: req.body.paymentMethod ?? existing.paymentMethod,
+          transactionRef:
+            req.body.transactionRef !== undefined
+              ? req.body.transactionRef
+                ? String(req.body.transactionRef).trim()
+                : null
+              : existing.transactionRef,
+          paymentDate: req.body.paymentDate ?? existing.paymentDate,
+          notes:
+            req.body.notes !== undefined
+              ? req.body.notes
+                ? String(req.body.notes).trim()
+                : null
+              : existing.notes,
+          updatedAt: new Date(),
+        })
+        .where(eq(doctorSalaries.id, id))
+        .returning();
+
+      const [doc] = await db.select().from(users).where(eq(users.id, updated.doctorId));
+
+      await logAudit(
+        req.user,
+        'UPDATE_DOCTOR_SALARY',
+        `${updated.salaryCode} (${doc?.fullName || updated.doctorId})`,
+        `Updated salary record: Payable ৳${totalPayableNum}, Paid ৳${paidNum}, Due ৳${dueNum} (${paymentStatus})`
+      );
+
+      res.json({
+        ...updated,
+        doctorName: doc?.fullName || `Doctor #${updated.doctorId}`,
+        doctorSpecialization: doc?.specialization || null,
+        doctorPhone: doc?.phone || null,
+      });
+    } catch (error: any) {
+      console.error('Error updating doctor salary:', error);
+      res.status(500).json({ error: 'Failed to update doctor salary record' });
+    }
+  }
+);
+
+apiRouter.delete(
+  '/doctor-salaries/:id',
+  authenticateToken,
+  requireRoles('main_doctor', 'developer'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      const [existing] = await db
+        .select()
+        .from(doctorSalaries)
+        .where(eq(doctorSalaries.id, id));
+
+      if (!existing) {
+        return res.status(404).json({ error: 'Salary record not found' });
+      }
+
+      await db.delete(doctorSalaries).where(eq(doctorSalaries.id, id));
+
+      await logAudit(
+        req.user,
+        'DELETE_DOCTOR_SALARY',
+        existing.salaryCode,
+        `Deleted doctor salary entry ${existing.salaryCode} (${existing.periodLabel}, Payable ৳${existing.totalPayable})`
+      );
+
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: 'Failed to delete doctor salary record' });
+    }
+  }
+);
+

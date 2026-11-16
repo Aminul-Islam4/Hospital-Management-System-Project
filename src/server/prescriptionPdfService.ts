@@ -307,7 +307,7 @@ function formatRxDateDisplay(isoDate?: string | null): string {
   if (!isoDate) return '-';
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(isoDate.trim());
   if (!m) return isoDate;
-  return `${m[3]}/${m[2]}/${m[1]}`;
+  return `${m[3]}-${m[2]}-${m[1]}`;
 }
 
 function toBulletLines(raw?: string | null): string[] {
@@ -1046,7 +1046,7 @@ export async function generatePrescriptionPdfBuffer(rx: any): Promise<Buffer> {
       // Follow-Up Date (Bangla Label)
       if (rx.followUpDate?.trim()) {
         const bnDate = formatBanglaDate(rx.followUpDate);
-        const followText = `পরবর্তী সাক্ষাতের তারিখ: ${bnDate} (${rx.followUpDate})`;
+        const followText = `পরবর্তী সাক্ষাতের তারিখ: ${bnDate} (${formatRxDateDisplay(rx.followUpDate)})`;
         const fh = measureMixedHeight(doc, followText, rightColW - 16, 9, true, 13) + 10;
         ensureRightSpace(fh + 8);
         doc.roundedRect(rightColX, rightY, rightColW, fh, 3).fillAndStroke(TEAL_SOFT, TEAL_BORDER);

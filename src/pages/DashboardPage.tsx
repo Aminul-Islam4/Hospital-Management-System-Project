@@ -23,9 +23,11 @@ import {
   Phone,
   X,
   FileText,
+  Wallet,
 } from 'lucide-react';
 import { Patient } from '../types/index.ts';
 import { DeveloperFeatureToggleCard } from '../components/DeveloperFeatureToggleCard.tsx';
+import { formatDateDDMMYYYY } from '../utils/dateFormat.ts';
 
 interface DashboardPageProps {
   refreshKey?: number;
@@ -160,6 +162,16 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               >
                 <FileText className="w-4 h-4" />
                 <span>Prescriptions (Rx)</span>
+              </button>
+            )}
+            {(isMainDoctor || isDeveloper) && (
+              <button
+                type="button"
+                onClick={() => onNavigate('salary-sheet')}
+                className="px-3.5 py-2 text-xs font-semibold rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer"
+              >
+                <Wallet className="w-4 h-4" />
+                <span>Doctor Salary Sheet</span>
               </button>
             )}
           </div>
@@ -588,7 +600,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                           {v.doctorName}
                         </span>
                       </td>
-                      <td className="py-3 px-4 text-slate-600">{v.visitDate}</td>
+                      <td className="py-3 px-4 text-slate-600">{formatDateDDMMYYYY(v.visitDate)}</td>
                       <td className="py-3 px-4 max-w-xs truncate text-slate-700">
                         {v.diagnosis || 'General Dental Checkup'}
                       </td>

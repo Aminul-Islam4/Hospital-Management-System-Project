@@ -13,7 +13,19 @@ import {
   PrescriptionTreatmentPlanItem,
   User,
 } from '../types/index.ts';
-import { BANGLA_CARE_CATEGORIES, formatBanglaDate } from '../utils/prescriptionPdf.ts';
+import {
+  BANGLA_CARE_CATEGORIES,
+  formatBanglaDate,
+  RxFieldLang,
+  PAIN_NOTE_BY_LANG,
+  parseAdditionalNotes,
+  buildAdditionalNotes,
+  convertAdditionalNotesLang,
+  autoFormatDuration,
+  handleLiveDurationInput,
+  toBanglaDigits,
+} from '../utils/prescriptionPdf.ts';
+import { formatDateDDMMYYYY } from '../utils/dateFormat.ts';
 import {
   X,
   Plus,
@@ -24,6 +36,8 @@ import {
   CalendarCheck,
   AlertTriangle,
   CheckCircle2,
+  Check,
+  Globe,
   Eye,
   Save,
   Sparkles,
@@ -36,6 +50,8 @@ import {
   ArrowUp,
   ArrowDown,
   BookmarkCheck,
+  History,
+  RotateCcw,
 } from 'lucide-react';
 
 interface PrescriptionFormModalProps {
@@ -87,11 +103,11 @@ const QUICK_TREATMENT_PLAN_PRESETS = [
 ];
 
 const QUICK_ADVISED_TEST_PRESETS = [
-  { testName: 'Intraoral Periapical Radiograph (IOPA)', category: 'IOPA', cost: '300' },
-  { testName: 'Orthopantomogram (OPG - Full Panoramic)', category: 'OPG', cost: '1200' },
-  { testName: 'Cone Beam CT (CBCT - Single Jaw)', category: 'CBCT', cost: '3500' },
-  { testName: 'Bite-wing Radiograph (Left/Right)', category: 'Dental X-ray', cost: '400' },
-  { testName: 'Random Blood Sugar (RBS) Test', category: 'Lab / Blood', cost: '200' },
+  { testName: 'Intraoral Periapical Radiograph (IOPA)', category: 'IOPA', cost: '' },
+  { testName: 'Orthopantomogram (OPG - Full Panoramic)', category: 'OPG', cost: '' },
+  { testName: 'Cone Beam CT (CBCT - Single Jaw)', category: 'CBCT', cost: '' },
+  { testName: 'Bite-wing Radiograph (Left/Right)', category: 'Dental X-ray', cost: '' },
+  { testName: 'Random Blood Sugar (RBS) Test', category: 'Lab / Blood', cost: '' },
 ];
 
 const emptyTreatmentPlanItem = (): PrescriptionTreatmentPlanItem => ({
@@ -216,6 +232,27 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const idempotencyKeyRef = useRef<string>('');
+
+  // Language mode for Duration & Additional Instructions ('bn' | 'en' | 'bilingual')
+  const [rxFieldLang, setRxFieldLang] = useState<RxFieldLang>('bn');
+  const [rowLangs, setRowLangs] = useState<Record<number, RxFieldLang>>({});
+  const durationInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
+
+  // Previous Prescriptions & Patient History Loader (Optional for returning patients)
+  const [previousPrescriptions, setPreviousPrescriptions] = useState<Prescription[]>([]);
+  const [selectedPrevSourceId, setSelectedPrevSourceId] = useState<string>('latest_combined');
+  const [showPrevHistorySelector, setShowPrevHistorySelector] = useState<boolean>(false);
+  const [prevLoadMode, setPrevLoadMode] = useState<'replace' | 'append'>('replace');
+  const [prevHistoryNotice, setPrevHistoryNotice] = useState<string | null>(null);
+  const [prevHistoryChecks, setPrevHistoryChecks] = useState({
+    pastHistoryDiseasesAllergies: true,
+    previousComplaints: true,
+    previousClinicalFindings: true,
+    previousCustomHistoryHeadings: true,
+    previousDiagnosisAndPlan: true,
+    previousPlannedTreatmentsAndTests: false,
+    previousMedicines: false,
+  });
 
   useEffect(() => {
     if (!isOpen) return;
@@ -375,24 +412,36 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
     return () => clearTimeout(t);
   }, [isOpen, selectedPatientId, patientSearchQuery]);
 
-  // Load full patient profile & visits when patient selected
+  // Load full patient profile, visits & previous prescriptions when patient selected
   useEffect(() => {
     if (!isOpen || !selectedPatientId) {
       setPatientProfile(null);
+      setPreviousPrescriptions([]);
+      setPrevHistoryNotice(null);
       return;
     }
 
     let cancelled = false;
     userChangedVisitRef.current = false;
     setLoadingProfile(true);
-    api
-      .getPatient(selectedPatientId)
-      .then((profile) => {
+    setPrevHistoryNotice(null);
+
+    Promise.all([
+      api.getPatient(selectedPatientId),
+      api.getPrescriptions({ patientId: selectedPatientId }).catch(() => [] as Prescription[]),
+    ])
+      .then(([profile, rxList]) => {
         if (cancelled) return;
         setPatientProfile(profile);
-        setPatientExistingDiseases((prev) => prev || profile.existingDiseases || '');
-        setPatientAllergies((prev) => prev || profile.allergies || '');
-        setPatientMedicalHistory((prev) => prev || profile.medicalHistory || '');
+
+        // Exclude the currently edited prescription if in edit mode
+        const filteredPrevRx = (rxList || []).filter((r) =>
+          editingPrescription ? r.id !== editingPrescription.id : true
+        );
+        setPreviousPrescriptions(filteredPrevRx);
+        setSelectedPrevSourceId(
+          filteredPrevRx.length > 0 ? String(filteredPrevRx[0].id) : 'latest_combined'
+        );
 
         if (!editingPrescription && !userChangedVisitRef.current) {
           const explicitVisit =
@@ -456,6 +505,299 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
       setDiagnosis(matched.diagnosis || '');
       if (matched.nextFollowUpDate) setFollowUpDate(matched.nextFollowUpDate);
     }
+  };
+
+  // Resolve available previous history data from the selected previous prescription or combined patient/visit history
+  const getResolvedPreviousHistory = () => {
+    const specificRx =
+      selectedPrevSourceId !== 'latest_combined'
+        ? previousPrescriptions.find((r) => String(r.id) === selectedPrevSourceId) ||
+          previousPrescriptions[0] ||
+          null
+        : previousPrescriptions[0] || null;
+
+    const firstNonEmptyFromRx = (
+      getter: (r: Prescription) => string | null | undefined
+    ): string => {
+      if (specificRx && selectedPrevSourceId !== 'latest_combined') {
+        const val = getter(specificRx);
+        if (val && val.trim()) return val.trim();
+      }
+      for (const r of previousPrescriptions) {
+        const val = getter(r);
+        if (val && val.trim()) return val.trim();
+      }
+      return '';
+    };
+
+    const firstNonEmptyFromVisits = (
+      getter: (v: NonNullable<PatientDetailedProfile['visits']>[number]) => string | null | undefined
+    ): string => {
+      for (const v of patientProfile?.visits || []) {
+        const val = getter(v);
+        if (val && val.trim()) return val.trim();
+      }
+      return '';
+    };
+
+    const existingDiseases =
+      firstNonEmptyFromRx((r) => r.patientExistingDiseases) ||
+      patientProfile?.existingDiseases?.trim() ||
+      '';
+    const allergies =
+      firstNonEmptyFromRx((r) => r.patientAllergies) ||
+      patientProfile?.allergies?.trim() ||
+      '';
+    const medicalHistory =
+      firstNonEmptyFromRx((r) => r.patientMedicalHistory) ||
+      patientProfile?.medicalHistory?.trim() ||
+      '';
+
+    const prevComplaints =
+      (specificRx && selectedPrevSourceId !== 'latest_combined'
+        ? specificRx.chiefComplaints?.trim()
+        : '') ||
+      firstNonEmptyFromRx((r) => r.chiefComplaints) ||
+      firstNonEmptyFromVisits((v) => v.complaints) ||
+      '';
+
+    const prevClinicalFindings =
+      (specificRx && selectedPrevSourceId !== 'latest_combined'
+        ? specificRx.clinicalFindings?.trim()
+        : '') ||
+      firstNonEmptyFromRx((r) => r.clinicalFindings) ||
+      '';
+
+    const prevDiagnosis =
+      (specificRx && selectedPrevSourceId !== 'latest_combined'
+        ? specificRx.diagnosis?.trim()
+        : '') ||
+      firstNonEmptyFromRx((r) => r.diagnosis) ||
+      firstNonEmptyFromVisits((v) => v.diagnosis) ||
+      '';
+
+    const prevTreatmentPlan =
+      (specificRx && selectedPrevSourceId !== 'latest_combined'
+        ? specificRx.treatmentPlan?.trim()
+        : '') ||
+      firstNonEmptyFromRx((r) => r.treatmentPlan) ||
+      '';
+
+    const prevCustomSections =
+      (specificRx?.customSections && specificRx.customSections.length > 0
+        ? specificRx.customSections
+        : previousPrescriptions.find((r) => (r.customSections?.length || 0) > 0)
+            ?.customSections) || [];
+
+    const prevPlanItems = specificRx?.treatmentPlanItems || [];
+    const prevTests = specificRx?.advisedTests || [];
+    const prevMeds = specificRx?.medicines || [];
+
+    const hasPastDiseaseOrAllergy = Boolean(
+      existingDiseases || allergies || medicalHistory
+    );
+    const hasAnyPreviousData = Boolean(
+      hasPastDiseaseOrAllergy ||
+        prevComplaints ||
+        prevClinicalFindings ||
+        prevDiagnosis ||
+        prevTreatmentPlan ||
+        prevCustomSections.length > 0 ||
+        prevPlanItems.length > 0 ||
+        prevTests.length > 0 ||
+        prevMeds.length > 0 ||
+        previousPrescriptions.length > 0 ||
+        (patientProfile?.visits?.length || 0) > 0
+    );
+
+    const sourceLabel = specificRx
+      ? `${specificRx.prescriptionNumber} (${formatDateDDMMYYYY(specificRx.prescriptionDate)})`
+      : 'Previous Patient & Visit Records';
+
+    return {
+      specificRx,
+      sourceLabel,
+      hasAnyPreviousData,
+      hasPastDiseaseOrAllergy,
+      existingDiseases,
+      allergies,
+      medicalHistory,
+      prevComplaints,
+      prevClinicalFindings,
+      prevDiagnosis,
+      prevTreatmentPlan,
+      prevCustomSections,
+      prevPlanItems,
+      prevTests,
+      prevMeds,
+    };
+  };
+
+  const mergeTextValue = (current: string, incoming: string, mode: 'replace' | 'append'): string => {
+    const cleanInc = incoming.trim();
+    if (!cleanInc) return current;
+    const cleanCur = current.trim();
+    if (mode === 'replace' || !cleanCur) return cleanInc;
+    if (cleanCur.toLowerCase().includes(cleanInc.toLowerCase())) return cleanCur;
+    return `${cleanCur}; ${cleanInc}`;
+  };
+
+  const applyPreviousHistories = (options: {
+    pastHistoryDiseasesAllergies?: boolean;
+    previousComplaints?: boolean;
+    previousClinicalFindings?: boolean;
+    previousCustomHistoryHeadings?: boolean;
+    previousDiagnosisAndPlan?: boolean;
+    previousPlannedTreatmentsAndTests?: boolean;
+    previousMedicines?: boolean;
+  }) => {
+    const resolved = getResolvedPreviousHistory();
+    const loadedParts: string[] = [];
+
+    if (options.pastHistoryDiseasesAllergies && resolved.hasPastDiseaseOrAllergy) {
+      if (resolved.existingDiseases) {
+        setPatientExistingDiseases((prev) =>
+          mergeTextValue(prev, resolved.existingDiseases, prevLoadMode)
+        );
+      }
+      if (resolved.allergies) {
+        setPatientAllergies((prev) => mergeTextValue(prev, resolved.allergies, prevLoadMode));
+      }
+      if (resolved.medicalHistory) {
+        setPatientMedicalHistory((prev) =>
+          mergeTextValue(prev, resolved.medicalHistory, prevLoadMode)
+        );
+      }
+      loadedParts.push('Past History, Diseases & Allergies');
+    }
+
+    if (options.previousComplaints && resolved.prevComplaints) {
+      setChiefComplaints((prev) => mergeTextValue(prev, resolved.prevComplaints, prevLoadMode));
+      loadedParts.push('Previous Complaints');
+    }
+
+    if (options.previousClinicalFindings && resolved.prevClinicalFindings) {
+      setClinicalFindings((prev) =>
+        mergeTextValue(prev, resolved.prevClinicalFindings, prevLoadMode)
+      );
+      loadedParts.push('Clinical Findings');
+    }
+
+    if (options.previousCustomHistoryHeadings && resolved.prevCustomSections.length > 0) {
+      setCustomSections((prev) => {
+        const next = [...prev];
+        for (const incomingSec of resolved.prevCustomSections) {
+          const h = (incomingSec.heading || '').trim();
+          const c = (incomingSec.content || '').trim();
+          if (!h || !c) continue;
+          const idx = next.findIndex((s) => s.heading.trim().toLowerCase() === h.toLowerCase());
+          if (idx >= 0) {
+            next[idx] = {
+              ...next[idx],
+              content: mergeTextValue(next[idx].content, c, prevLoadMode),
+            };
+          } else {
+            next.push({ heading: h, content: c });
+          }
+        }
+        return next;
+      });
+      loadedParts.push('Previous Custom History Headings');
+    }
+
+    if (options.previousDiagnosisAndPlan) {
+      if (resolved.prevDiagnosis) {
+        setDiagnosis((prev) => mergeTextValue(prev, resolved.prevDiagnosis, prevLoadMode));
+      }
+      if (resolved.prevTreatmentPlan) {
+        setTreatmentPlan((prev) => mergeTextValue(prev, resolved.prevTreatmentPlan, prevLoadMode));
+      }
+      if (resolved.prevDiagnosis || resolved.prevTreatmentPlan) {
+        loadedParts.push('Previous Diagnosis & Plan');
+      }
+    }
+
+    if (options.previousPlannedTreatmentsAndTests) {
+      if (resolved.prevPlanItems.length > 0) {
+        setShowOptionalSections(true);
+        setTreatmentPlanItems(
+          resolved.prevPlanItems.map((p) => ({
+            treatmentName: p.treatmentName || '',
+            toothNumber: p.toothNumber || '',
+            cost: p.cost !== null && p.cost !== undefined ? String(parseFloat(p.cost)) : '',
+            notes: p.notes || '',
+          }))
+        );
+      }
+      if (resolved.prevTests.length > 0) {
+        setShowOptionalSections(true);
+        setAdvisedTests(
+          resolved.prevTests.map((t) => ({
+            testName: t.testName || '',
+            category: t.category || 'Dental X-ray',
+            cost: t.cost !== null && t.cost !== undefined ? String(parseFloat(t.cost)) : '',
+            notes: t.notes || '',
+          }))
+        );
+      }
+      if (resolved.prevPlanItems.length > 0 || resolved.prevTests.length > 0) {
+        loadedParts.push('Planned Treatments & Tests');
+      }
+    }
+
+    if (options.previousMedicines && resolved.prevMeds.length > 0) {
+      setMedicines(
+        resolved.prevMeds.map((m) => ({
+          medicineId: m.medicineId ?? null,
+          medicineName: m.medicineName || '',
+          genericName: m.genericName || '',
+          strength: m.strength || '',
+          dosageType: m.dosageType || '',
+          manufacturer: m.manufacturer || '',
+          packageMark: m.packageMark || '',
+          dosage: m.dosage || '',
+          frequency: m.frequency || '',
+          duration: m.duration || '',
+          mealInstructions: m.mealInstructions || '',
+          additionalNotes: m.additionalNotes || '',
+        }))
+      );
+      loadedParts.push('Previous Medicines');
+    }
+
+    if (loadedParts.length > 0) {
+      setPrevHistoryNotice(
+        `Loaded ${loadedParts.join(', ')} from ${resolved.sourceLabel}.`
+      );
+    } else {
+      setPrevHistoryNotice(
+        `No non-empty history fields found for the selected option in ${resolved.sourceLabel}.`
+      );
+    }
+  };
+
+  const handleLoadAllPreviousNecessaryHistories = () => {
+    applyPreviousHistories({
+      pastHistoryDiseasesAllergies: true,
+      previousComplaints: true,
+      previousClinicalFindings: true,
+      previousCustomHistoryHeadings: true,
+      previousDiagnosisAndPlan: true,
+      previousPlannedTreatmentsAndTests: false,
+      previousMedicines: false,
+    });
+  };
+
+  const handleClearLoadedHistories = () => {
+    setPatientExistingDiseases('');
+    setPatientAllergies('');
+    setPatientMedicalHistory('');
+    setChiefComplaints('');
+    setClinicalFindings('');
+    setDiagnosis('');
+    setTreatmentPlan('');
+    setCustomSections((prev) => prev.map((s) => ({ ...s, content: '' })));
+    setPrevHistoryNotice('Cleared loaded history fields from this prescription.');
   };
 
   // 250ms debounced local PostgreSQL medicine catalog autocomplete
@@ -532,6 +874,80 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
         return { ...m, [field]: val };
       })
     );
+  };
+
+  const getRowLang = (idx: number): RxFieldLang => rowLangs[idx] || rxFieldLang;
+
+  const setRowLanguage = (idx: number, lang: RxFieldLang) => {
+    setRowLangs((prev) => ({ ...prev, [idx]: lang }));
+    setMedicines((prev) =>
+      prev.map((m, i) => {
+        if (i !== idx) return m;
+        return {
+          ...m,
+          duration: m.duration?.trim() ? autoFormatDuration(m.duration, lang) : m.duration,
+          additionalNotes: m.additionalNotes?.trim()
+            ? convertAdditionalNotesLang(m.additionalNotes, lang)
+            : m.additionalNotes,
+        };
+      })
+    );
+  };
+
+  const setGlobalLanguage = (lang: RxFieldLang) => {
+    setRxFieldLang(lang);
+    setRowLangs({});
+    setMedicines((prev) =>
+      prev.map((m) => ({
+        ...m,
+        duration: m.duration?.trim() ? autoFormatDuration(m.duration, lang) : m.duration,
+        additionalNotes: m.additionalNotes?.trim()
+          ? convertAdditionalNotesLang(m.additionalNotes, lang)
+          : m.additionalNotes,
+      }))
+    );
+  };
+
+  const handleDurationChange = (idx: number, rawVal: string) => {
+    const lang = getRowLang(idx);
+    const prevVal = medicines[idx]?.duration || '';
+    const { value, cursorIndex } = handleLiveDurationInput(rawVal, prevVal, lang);
+    updateMedicineField(idx, 'duration', value);
+    if (cursorIndex !== null) {
+      requestAnimationFrame(() => {
+        const inputEl = durationInputRefs.current[idx];
+        if (inputEl && document.activeElement === inputEl) {
+          inputEl.setSelectionRange(cursorIndex, cursorIndex);
+        }
+      });
+    }
+  };
+
+  const handleDurationBlur = (idx: number) => {
+    const lang = getRowLang(idx);
+    const cur = medicines[idx]?.duration || '';
+    if (!cur.trim()) return;
+    const formatted = autoFormatDuration(cur, lang);
+    if (formatted !== cur) {
+      updateMedicineField(idx, 'duration', formatted);
+    }
+  };
+
+  const togglePainInstruction = (idx: number) => {
+    const lang = getRowLang(idx);
+    const cur = medicines[idx]?.additionalNotes || '';
+    const { hasPainNote, customNote } = parseAdditionalNotes(cur);
+    const updated = buildAdditionalNotes(!hasPainNote, customNote, lang);
+    updateMedicineField(idx, 'additionalNotes', updated);
+  };
+
+  const handleCustomNoteInput = (idx: number, newCustomText: string) => {
+    const lang = getRowLang(idx);
+    const cur = medicines[idx]?.additionalNotes || '';
+    const { hasPainNote } = parseAdditionalNotes(cur);
+    const convertedText = lang === 'bn' ? toBanglaDigits(newCustomText) : newCustomText;
+    const updated = buildAdditionalNotes(hasPainNote, convertedText, lang);
+    updateMedicineField(idx, 'additionalNotes', updated);
   };
 
   // Fill catalog metadata ONLY — never auto-prescribe dosage, frequency, duration, or instructions!
@@ -665,16 +1081,23 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
       return;
     }
 
-    const nonEmptyMeds = medicines.filter(
-      (m) =>
-        m.medicineName?.trim() ||
-        m.genericName?.trim() ||
-        m.strength?.trim() ||
-        m.dosage?.trim() ||
-        m.frequency?.trim() ||
-        m.duration?.trim() ||
-        m.additionalNotes?.trim()
-    );
+    const nonEmptyMeds = medicines
+      .map((m, idx) => ({
+        ...m,
+        duration: m.duration?.trim()
+          ? autoFormatDuration(m.duration, getRowLang(idx))
+          : m.duration || '',
+      }))
+      .filter(
+        (m) =>
+          m.medicineName?.trim() ||
+          m.genericName?.trim() ||
+          m.strength?.trim() ||
+          m.dosage?.trim() ||
+          m.frequency?.trim() ||
+          m.duration?.trim() ||
+          m.additionalNotes?.trim()
+      );
 
     for (const m of nonEmptyMeds) {
       if (!m.medicineName || !m.medicineName.trim()) {
@@ -1024,6 +1447,388 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                   )}
                 </div>
 
+                {/* PREVIOUS PRESCRIPTION & PATIENT HISTORY LOADER (OPTIONAL FOR RETURNING PATIENTS) */}
+                {(() => {
+                  const resolvedPrev = getResolvedPreviousHistory();
+                  if (!resolvedPrev.hasAnyPreviousData) return null;
+
+                  return (
+                    <div className="p-3.5 rounded-xl bg-gradient-to-r from-indigo-50/80 via-teal-50/70 to-slate-50 border border-teal-200/90 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-extrabold text-slate-900 text-xs flex items-center gap-1.5">
+                              <History className="w-4 h-4 text-teal-700" />
+                              <span>
+                                Load Previous Prescription &amp; Patient Histories
+                              </span>
+                            </span>
+                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-teal-100/80 text-teal-900 border border-teal-300">
+                              Optional &bull; Returning Patient
+                            </span>
+                            <span className="text-[11px] font-semibold text-slate-600">
+                              ({previousPrescriptions.length} prev Rx &bull;{' '}
+                              {patientProfile?.visits?.length || 0} visit
+                              {(patientProfile?.visits?.length || 0) === 1 ? '' : 's'})
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-600">
+                            Optionally take Past History, Existing Diseases &amp; Drug Allergies, Previous Complaints, Clinical Findings, or Custom History from a previous prescription into this prescription.
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={handleLoadAllPreviousNecessaryHistories}
+                            className="px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                            title="Load Past History, Diseases & Allergies, Previous Complaints, Findings, Diagnosis & Custom History Headings"
+                          >
+                            <Sparkles className="w-3.5 h-3.5" />
+                            <span>Take All Necessary Histories</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setShowPrevHistorySelector((v) => !v)}
+                            className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-teal-50 text-teal-900 border border-teal-300 font-bold text-xs flex items-center gap-1 cursor-pointer"
+                          >
+                            <ChevronDown
+                              className={`w-3.5 h-3.5 transition-transform ${
+                                showPrevHistorySelector ? 'rotate-180' : ''
+                              }`}
+                            />
+                            <span>
+                              {showPrevHistorySelector ? 'Hide Options' : 'Select Specific Histories'}
+                            </span>
+                          </button>
+
+                          {(patientExistingDiseases.trim() ||
+                            patientAllergies.trim() ||
+                            patientMedicalHistory.trim() ||
+                            chiefComplaints.trim() ||
+                            clinicalFindings.trim()) && (
+                            <button
+                              type="button"
+                              onClick={handleClearLoadedHistories}
+                              className="px-2 py-1.5 rounded-lg bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 font-semibold text-[11px] flex items-center gap-1 cursor-pointer"
+                              title="Clear loaded histories from current prescription"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              <span>Clear</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Quick 1-Click Category Pills */}
+                      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                        {previousPrescriptions.length > 0 && (
+                          <div className="flex items-center gap-1.5 mr-1">
+                            <span className="text-[11px] font-semibold text-slate-700">
+                              Source Rx:
+                            </span>
+                            <select
+                              value={selectedPrevSourceId}
+                              onChange={(e) => setSelectedPrevSourceId(e.target.value)}
+                              className="px-2 py-1 rounded-lg border border-slate-300 bg-white text-[11px] font-semibold text-slate-900"
+                            >
+                              {previousPrescriptions.map((r, i) => (
+                                <option key={r.id} value={String(r.id)}>
+                                  {i === 0 ? 'Latest: ' : ''}
+                                  {r.prescriptionNumber} ({formatDateDDMMYYYY(r.prescriptionDate)})
+                                  {r.diagnosis ? ` — ${r.diagnosis.slice(0, 32)}` : ''}
+                                </option>
+                              ))}
+                              <option value="latest_combined">
+                                Combined Latest Patient &amp; Visit History
+                              </option>
+                            </select>
+                          </div>
+                        )}
+
+                        {resolvedPrev.hasPastDiseaseOrAllergy && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              applyPreviousHistories({ pastHistoryDiseasesAllergies: true })
+                            }
+                            className="px-2 py-1 rounded-md bg-white hover:bg-teal-50 text-slate-800 border border-slate-300 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <span>+ Past History, Diseases &amp; Allergies</span>
+                          </button>
+                        )}
+
+                        {resolvedPrev.prevComplaints && (
+                          <button
+                            type="button"
+                            onClick={() => applyPreviousHistories({ previousComplaints: true })}
+                            className="px-2 py-1 rounded-md bg-white hover:bg-teal-50 text-slate-800 border border-slate-300 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <span>+ Previous Complaints</span>
+                          </button>
+                        )}
+
+                        {(resolvedPrev.prevClinicalFindings ||
+                          resolvedPrev.prevCustomSections.length > 0) && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              applyPreviousHistories({
+                                previousClinicalFindings: true,
+                                previousCustomHistoryHeadings: true,
+                              })
+                            }
+                            className="px-2 py-1 rounded-md bg-white hover:bg-teal-50 text-slate-800 border border-slate-300 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <span>+ Previous History &amp; Findings</span>
+                          </button>
+                        )}
+
+                        {(resolvedPrev.prevDiagnosis || resolvedPrev.prevTreatmentPlan) && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              applyPreviousHistories({ previousDiagnosisAndPlan: true })
+                            }
+                            className="px-2 py-1 rounded-md bg-white hover:bg-teal-50 text-slate-800 border border-slate-300 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <span>+ Previous Diagnosis &amp; Plan</span>
+                          </button>
+                        )}
+                      </div>
+
+                      {prevHistoryNotice && (
+                        <div className="px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 text-[11px] font-semibold flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-1.5">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            <span>{prevHistoryNotice}</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setPrevHistoryNotice(null)}
+                            className="text-[10px] text-emerald-800 hover:underline cursor-pointer"
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Expandable Checklist Drawer to Select Specific Previous Histories */}
+                      {showPrevHistorySelector && (
+                        <div className="pt-2.5 border-t border-teal-200/80 space-y-2.5">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-bold text-slate-800 text-[11px]">
+                              Tick the previous history items you want to bring into this prescription:
+                            </span>
+                            <div className="inline-flex items-center rounded-lg border border-slate-300 bg-white p-0.5 text-[10px] font-bold">
+                              <button
+                                type="button"
+                                onClick={() => setPrevLoadMode('replace')}
+                                className={`px-2 py-0.5 rounded cursor-pointer ${
+                                  prevLoadMode === 'replace'
+                                    ? 'bg-teal-600 text-white'
+                                    : 'text-slate-600 hover:bg-slate-100'
+                                }`}
+                              >
+                                Replace Current
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setPrevLoadMode('append')}
+                                className={`px-2 py-0.5 rounded cursor-pointer ${
+                                  prevLoadMode === 'append'
+                                    ? 'bg-teal-600 text-white'
+                                    : 'text-slate-600 hover:bg-slate-100'
+                                }`}
+                              >
+                                Append / Merge
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {/* 1. Past History, Existing Diseases & Drug Allergies */}
+                            <label className="p-2.5 rounded-lg bg-white border border-slate-200 hover:border-teal-300 flex items-start gap-2.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={prevHistoryChecks.pastHistoryDiseasesAllergies}
+                                onChange={(e) =>
+                                  setPrevHistoryChecks((prev) => ({
+                                    ...prev,
+                                    pastHistoryDiseasesAllergies: e.target.checked,
+                                  }))
+                                }
+                                className="mt-0.5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="font-bold text-slate-900 text-[11px]">
+                                  Past History, Existing Diseases &amp; Drug Allergies
+                                </div>
+                                <div className="text-[10.5px] text-slate-600 truncate">
+                                  {resolvedPrev.hasPastDiseaseOrAllergy
+                                    ? [
+                                        resolvedPrev.existingDiseases &&
+                                          `Diseases: ${resolvedPrev.existingDiseases}`,
+                                        resolvedPrev.allergies &&
+                                          `Allergies: ${resolvedPrev.allergies}`,
+                                        resolvedPrev.medicalHistory &&
+                                          `Past History: ${resolvedPrev.medicalHistory}`,
+                                      ]
+                                        .filter(Boolean)
+                                        .join(' • ')
+                                    : 'No past diseases/allergies recorded'}
+                                </div>
+                              </div>
+                            </label>
+
+                            {/* 2. Previous Chief Complaints */}
+                            <label className="p-2.5 rounded-lg bg-white border border-slate-200 hover:border-teal-300 flex items-start gap-2.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={prevHistoryChecks.previousComplaints}
+                                onChange={(e) =>
+                                  setPrevHistoryChecks((prev) => ({
+                                    ...prev,
+                                    previousComplaints: e.target.checked,
+                                  }))
+                                }
+                                className="mt-0.5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="font-bold text-slate-900 text-[11px]">
+                                  Previous Chief Complaints
+                                </div>
+                                <div className="text-[10.5px] text-slate-600 truncate">
+                                  {resolvedPrev.prevComplaints || 'No previous complaints recorded'}
+                                </div>
+                              </div>
+                            </label>
+
+                            {/* 3. Previous Clinical Findings / Examination History */}
+                            <label className="p-2.5 rounded-lg bg-white border border-slate-200 hover:border-teal-300 flex items-start gap-2.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={prevHistoryChecks.previousClinicalFindings}
+                                onChange={(e) =>
+                                  setPrevHistoryChecks((prev) => ({
+                                    ...prev,
+                                    previousClinicalFindings: e.target.checked,
+                                  }))
+                                }
+                                className="mt-0.5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="font-bold text-slate-900 text-[11px]">
+                                  Previous Clinical Findings / On Examinations
+                                </div>
+                                <div className="text-[10.5px] text-slate-600 truncate">
+                                  {resolvedPrev.prevClinicalFindings ||
+                                    'No previous clinical findings recorded'}
+                                </div>
+                              </div>
+                            </label>
+
+                            {/* 4. Previous Custom History Headings */}
+                            <label className="p-2.5 rounded-lg bg-white border border-slate-200 hover:border-teal-300 flex items-start gap-2.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={prevHistoryChecks.previousCustomHistoryHeadings}
+                                onChange={(e) =>
+                                  setPrevHistoryChecks((prev) => ({
+                                    ...prev,
+                                    previousCustomHistoryHeadings: e.target.checked,
+                                  }))
+                                }
+                                className="mt-0.5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="font-bold text-slate-900 text-[11px]">
+                                  Previous Personalized History / Custom Sections
+                                </div>
+                                <div className="text-[10.5px] text-slate-600 truncate">
+                                  {resolvedPrev.prevCustomSections.length > 0
+                                    ? resolvedPrev.prevCustomSections
+                                        .map((s) => `${s.heading}: ${s.content}`)
+                                        .join(' • ')
+                                    : 'No custom history headings in selected Rx'}
+                                </div>
+                              </div>
+                            </label>
+
+                            {/* 5. Previous Diagnosis & Treatment Plan */}
+                            <label className="p-2.5 rounded-lg bg-white border border-slate-200 hover:border-teal-300 flex items-start gap-2.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={prevHistoryChecks.previousDiagnosisAndPlan}
+                                onChange={(e) =>
+                                  setPrevHistoryChecks((prev) => ({
+                                    ...prev,
+                                    previousDiagnosisAndPlan: e.target.checked,
+                                  }))
+                                }
+                                className="mt-0.5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="font-bold text-slate-900 text-[11px]">
+                                  Previous Diagnosis &amp; Treatment Plan Notes
+                                </div>
+                                <div className="text-[10.5px] text-slate-600 truncate">
+                                  {[
+                                    resolvedPrev.prevDiagnosis &&
+                                      `Dx: ${resolvedPrev.prevDiagnosis}`,
+                                    resolvedPrev.prevTreatmentPlan &&
+                                      `Plan: ${resolvedPrev.prevTreatmentPlan}`,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' • ') || 'No previous diagnosis/plan recorded'}
+                                </div>
+                              </div>
+                            </label>
+
+                            {/* 6. Previous Planned Treatments & Advised Tests */}
+                            <label className="p-2.5 rounded-lg bg-white border border-slate-200 hover:border-teal-300 flex items-start gap-2.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={prevHistoryChecks.previousPlannedTreatmentsAndTests}
+                                onChange={(e) =>
+                                  setPrevHistoryChecks((prev) => ({
+                                    ...prev,
+                                    previousPlannedTreatmentsAndTests: e.target.checked,
+                                  }))
+                                }
+                                className="mt-0.5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="font-bold text-slate-900 text-[11px]">
+                                  Previous Planned Treatments &amp; Advised Tests
+                                </div>
+                                <div className="text-[10.5px] text-slate-600 truncate">
+                                  {resolvedPrev.prevPlanItems.length > 0 ||
+                                  resolvedPrev.prevTests.length > 0
+                                    ? `${resolvedPrev.prevPlanItems.length} treatment(s), ${resolvedPrev.prevTests.length} test(s)`
+                                    : 'None in selected Rx'}
+                                </div>
+                              </div>
+                            </label>
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => applyPreviousHistories(prevHistoryChecks)}
+                              className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Load Selected Histories to Prescription</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">
@@ -1042,9 +1847,16 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Prescription Date *
-                    </label>
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <label className="block font-semibold text-slate-700">
+                        Prescription Date *
+                      </label>
+                      {prescriptionDate && (
+                        <span className="text-[10.5px] font-mono font-bold text-teal-800">
+                          {formatDateDDMMYYYY(prescriptionDate)}
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="date"
                       required
@@ -1076,7 +1888,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                       )}
                       {patientProfile?.visits.map((v) => (
                         <option key={v.id} value={v.id}>
-                          {v.visitId} &bull; {v.visitDate} &bull; {v.doctorName}
+                          {v.visitId} &bull; {formatDateDDMMYYYY(v.visitDate)} &bull; {v.doctorName}
                         </option>
                       ))}
                     </select>
@@ -1088,15 +1900,49 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                   </div>
                 </div>
 
-                {/* Patient Past / Disease / Allergy History (Synced to Centralized Patient Profile) */}
+                {/* Patient Past / Disease / Allergy History (Optional / Synced to Centralized Patient Profile) */}
                 <div className="p-3 rounded-xl bg-slate-50/90 border border-slate-200 space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-bold text-slate-800 text-[11px] uppercase tracking-wider">
-                      Past History, Existing Diseases &amp; Drug Allergies
-                    </span>
-                    <span className="text-[10px] font-semibold text-teal-700">
-                      Automatically updates centralized Patient Medical History
-                    </span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-bold text-slate-800 text-[11px] uppercase tracking-wider">
+                        Past History, Existing Diseases &amp; Drug Allergies
+                      </span>
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-200/80 text-slate-700">
+                        Optional
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {getResolvedPreviousHistory().hasPastDiseaseOrAllergy && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            applyPreviousHistories({ pastHistoryDiseasesAllergies: true })
+                          }
+                          className="px-2 py-0.5 rounded bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-300 text-[10.5px] font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <History className="w-3 h-3" />
+                          <span>Load Previous Past History &amp; Allergies</span>
+                        </button>
+                      )}
+                      {(patientExistingDiseases.trim() ||
+                        patientAllergies.trim() ||
+                        patientMedicalHistory.trim()) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPatientExistingDiseases('');
+                            setPatientAllergies('');
+                            setPatientMedicalHistory('');
+                          }}
+                          className="text-[10px] font-semibold text-rose-600 hover:underline cursor-pointer"
+                        >
+                          Clear
+                        </button>
+                      )}
+                      <span className="text-[10px] font-semibold text-teal-700">
+                        Updates centralized Patient Medical History when synced
+                      </span>
+                    </div>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                     <div>
@@ -1140,9 +1986,21 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Chief Complaints
-                    </label>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <label className="block font-semibold text-slate-700">
+                        Chief Complaints
+                      </label>
+                      {getResolvedPreviousHistory().prevComplaints && (
+                        <button
+                          type="button"
+                          onClick={() => applyPreviousHistories({ previousComplaints: true })}
+                          className="text-[10.5px] font-bold text-teal-700 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <History className="w-3 h-3" />
+                          <span>Load Previous Complaints</span>
+                        </button>
+                      )}
+                    </div>
                     <textarea
                       rows={2}
                       value={chiefComplaints}
@@ -1153,9 +2011,23 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Clinical Findings
-                    </label>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <label className="block font-semibold text-slate-700">
+                        Clinical Findings
+                      </label>
+                      {getResolvedPreviousHistory().prevClinicalFindings && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            applyPreviousHistories({ previousClinicalFindings: true })
+                          }
+                          className="text-[10.5px] font-bold text-teal-700 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <History className="w-3 h-3" />
+                          <span>Load Previous Findings</span>
+                        </button>
+                      )}
+                    </div>
                     <textarea
                       rows={2}
                       value={clinicalFindings}
@@ -1166,7 +2038,27 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">Diagnosis</label>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <label className="block font-semibold text-slate-700">Diagnosis</label>
+                      {getResolvedPreviousHistory().prevDiagnosis && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setDiagnosis((prev) =>
+                              mergeTextValue(
+                                prev,
+                                getResolvedPreviousHistory().prevDiagnosis,
+                                prevLoadMode
+                              )
+                            )
+                          }
+                          className="text-[10.5px] font-bold text-teal-700 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <History className="w-3 h-3" />
+                          <span>Load Previous Diagnosis</span>
+                        </button>
+                      )}
+                    </div>
                     <input
                       type="text"
                       value={diagnosis}
@@ -1177,9 +2069,16 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      পরবর্তী সাক্ষাতের তারিখ:
-                    </label>
+                    <div className="flex items-center justify-between gap-1 mb-1">
+                      <label className="block font-semibold text-slate-700">
+                        পরবর্তী সাক্ষাতের তারিখ:
+                      </label>
+                      {followUpDate && (
+                        <span className="text-[10.5px] font-mono font-bold text-teal-800">
+                          {formatDateDDMMYYYY(followUpDate)}
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="date"
                       value={followUpDate}
@@ -1188,15 +2087,35 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                     />
                     {followUpDate && (
                       <div className="text-[11px] font-semibold text-teal-800 mt-1">
-                        বাংলা তারিখ: {formatBanglaDate(followUpDate)}
+                        বাংলা তারিখ: {formatBanglaDate(followUpDate)} ({formatDateDDMMYYYY(followUpDate)})
                       </div>
                     )}
                   </div>
 
                   <div className="md:col-span-2">
-                    <label className="block font-semibold text-slate-700 mb-1">
-                      Treatment Plan
-                    </label>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <label className="block font-semibold text-slate-700">
+                        Treatment Plan
+                      </label>
+                      {getResolvedPreviousHistory().prevTreatmentPlan && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setTreatmentPlan((prev) =>
+                              mergeTextValue(
+                                prev,
+                                getResolvedPreviousHistory().prevTreatmentPlan,
+                                prevLoadMode
+                              )
+                            )
+                          }
+                          className="text-[10.5px] font-bold text-teal-700 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <History className="w-3 h-3" />
+                          <span>Load Previous Treatment Plan</span>
+                        </button>
+                      )}
+                    </div>
                     <textarea
                       rows={2}
                       value={treatmentPlan}
@@ -1394,14 +2313,46 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                       Search the local Bangladesh medicine database by brand, generic, strength, dosage form, or manufacturer — or enter custom entries. Enter Dosage, Frequency, Duration &amp; Instructions freely in English or বাংলা.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={addMedicineRow}
-                    className="px-3 py-1.5 text-xs font-bold rounded-lg bg-teal-600 hover:bg-teal-700 text-white flex items-center gap-1.5 shadow-2xs cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add Medicine</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div
+                      className="inline-flex items-center rounded-lg border border-teal-200 bg-white p-0.5 text-[11px] font-bold shadow-2xs"
+                      title="Default Language for Duration & Additional Instructions"
+                    >
+                      <span className="px-2 py-1 text-slate-500 flex items-center gap-1">
+                        <Globe className="w-3 h-3 text-teal-600" />
+                        <span>ভাষা / Lang:</span>
+                      </span>
+                      {(
+                        [
+                          { id: 'bn', label: 'বাংলা' },
+                          { id: 'en', label: 'English' },
+                          { id: 'bilingual', label: 'Bilingual' },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setGlobalLanguage(opt.id)}
+                          className={`px-2 py-1 rounded-md transition-colors cursor-pointer ${
+                            rxFieldLang === opt.id && Object.keys(rowLangs).length === 0
+                              ? 'bg-teal-600 text-white'
+                              : 'text-slate-700 hover:bg-teal-50'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={addMedicineRow}
+                      className="px-3 py-1.5 text-xs font-bold rounded-lg bg-teal-600 hover:bg-teal-700 text-white flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Medicine</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-3">
@@ -1629,16 +2580,77 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                         </div>
 
                         <div>
-                          <label className="block font-semibold text-slate-700 mb-1">
-                            Duration
-                          </label>
-                          <input
-                            type="text"
-                            value={med.duration || ''}
-                            onChange={(e) => updateMedicineField(idx, 'duration', e.target.value)}
-                            placeholder="e.g., 5 days / ৫ দিন"
-                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300"
-                          />
+                          <div className="flex items-center justify-between gap-1 mb-1">
+                            <label className="block font-semibold text-slate-700">
+                              Duration
+                            </label>
+                            <div
+                              className="inline-flex items-center rounded-md border border-slate-300 bg-slate-50 p-0.5 text-[10px] font-bold"
+                              title="Change Duration & Notes language (বাংলা / English / Bilingual)"
+                            >
+                              {(
+                                [
+                                  { id: 'bn', label: 'বাংলা' },
+                                  { id: 'en', label: 'EN' },
+                                  { id: 'bilingual', label: 'Bi' },
+                                ] as const
+                              ).map((opt) => {
+                                const activeLang = getRowLang(idx);
+                                return (
+                                  <button
+                                    key={opt.id}
+                                    type="button"
+                                    onClick={() => setRowLanguage(idx, opt.id)}
+                                    className={`px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
+                                      activeLang === opt.id
+                                        ? 'bg-teal-600 text-white'
+                                        : 'text-slate-600 hover:bg-slate-200'
+                                    }`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              ref={(el) => {
+                                durationInputRefs.current[idx] = el;
+                              }}
+                              type="text"
+                              value={med.duration || ''}
+                              onChange={(e) => handleDurationChange(idx, e.target.value)}
+                              onBlur={() => handleDurationBlur(idx)}
+                              placeholder={
+                                getRowLang(idx) === 'bn'
+                                  ? 'যেমন: ৫ লিখলে স্বয়ংক্রিয়ভাবে "৫ দিন"'
+                                  : getRowLang(idx) === 'en'
+                                    ? 'e.g., Type 5 -> "5 days"'
+                                    : 'e.g., Type 5 -> "৫ দিন (5 days)"'
+                              }
+                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 font-semibold text-slate-900 focus:ring-2 focus:ring-teal-500"
+                            />
+                          </div>
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {['3', '5', '7', '10', '14'].map((dNum) => {
+                              const formattedChip = autoFormatDuration(dNum, getRowLang(idx));
+                              return (
+                                <button
+                                  key={dNum}
+                                  type="button"
+                                  onClick={() => updateMedicineField(idx, 'duration', formattedChip)}
+                                  className={`px-1.5 py-0.5 text-[10px] rounded cursor-pointer border transition-colors ${
+                                    med.duration === formattedChip
+                                      ? 'bg-teal-600 text-white border-teal-600 font-bold'
+                                      : 'bg-slate-100 hover:bg-teal-100 text-slate-700 border-transparent'
+                                  }`}
+                                >
+                                  {formattedChip}
+                                </button>
+                              );
+                            })}
+                          </div>
                         </div>
 
                         <div>
@@ -1663,21 +2675,109 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Row 3: Additional Medicine Notes */}
-                      <div>
-                        <label className="block font-semibold text-slate-700 mb-1">
-                          Additional Instructions / Notes
-                        </label>
-                        <input
-                          type="text"
-                          value={med.additionalNotes || ''}
-                          onChange={(e) =>
-                            updateMedicineField(idx, 'additionalNotes', e.target.value)
-                          }
-                          placeholder="e.g., Take only if pain persists / ব্যথা হলে খাবেন..."
-                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300"
-                        />
-                      </div>
+                      {/* Row 3: Additional Medicine Notes with Selectable 'ব্যথা হলে খাবেন' Tick Mark + Custom Variable Input + Language Switcher */}
+                      {(() => {
+                        const activeLang = getRowLang(idx);
+                        const { hasPainNote, customNote } = parseAdditionalNotes(
+                          med.additionalNotes
+                        );
+                        const painLabel = PAIN_NOTE_BY_LANG[activeLang];
+
+                        return (
+                          <div className="space-y-1.5">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <label className="block font-semibold text-slate-700">
+                                Additional Instructions / Notes
+                              </label>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] text-slate-500 font-medium">
+                                  Language:
+                                </span>
+                                <div className="inline-flex items-center rounded-lg border border-slate-300 bg-slate-50 p-0.5 text-[10px] font-bold">
+                                  {(
+                                    [
+                                      { id: 'bn', label: 'বাংলা' },
+                                      { id: 'en', label: 'English' },
+                                      { id: 'bilingual', label: 'Bilingual' },
+                                    ] as const
+                                  ).map((opt) => (
+                                    <button
+                                      key={opt.id}
+                                      type="button"
+                                      onClick={() => setRowLanguage(idx, opt.id)}
+                                      className={`px-2 py-0.5 rounded transition-colors cursor-pointer ${
+                                        activeLang === opt.id
+                                          ? 'bg-teal-600 text-white'
+                                          : 'text-slate-600 hover:bg-slate-200'
+                                      }`}
+                                    >
+                                      {opt.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                              {/* Selectable Tick-Mark Checkbox Button for "ব্যথা হলে খাবেন" */}
+                              <button
+                                type="button"
+                                role="checkbox"
+                                aria-checked={hasPainNote}
+                                onClick={() => togglePainInstruction(idx)}
+                                className={`px-3 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-2 shrink-0 transition-all cursor-pointer ${
+                                  hasPainNote
+                                    ? 'bg-teal-50 border-teal-600 text-teal-900 shadow-2xs ring-1 ring-teal-500/30'
+                                    : 'bg-slate-50 border-slate-300 text-slate-700 hover:bg-slate-100'
+                                }`}
+                                title="Click to tick or untick 'ব্যথা হলে খাবেন' on this medicine"
+                              >
+                                <span
+                                  className={`w-4 h-4 rounded flex items-center justify-center border transition-colors ${
+                                    hasPainNote
+                                      ? 'bg-teal-600 border-teal-600 text-white'
+                                      : 'bg-white border-slate-400 text-transparent'
+                                  }`}
+                                >
+                                  <Check className="w-3 h-3 stroke-[3]" />
+                                </span>
+                                <span>{painLabel}</span>
+                              </button>
+
+                              {/* Custom Variable / Note Input Box (Present Box) */}
+                              <div className="flex-1 relative">
+                                <input
+                                  type="text"
+                                  value={customNote}
+                                  onChange={(e) => handleCustomNoteInput(idx, e.target.value)}
+                                  placeholder={
+                                    hasPainNote
+                                      ? 'Write additional custom note / অন্য কোনো নির্দেশনা লিখুন (ঐচ্ছিক)...'
+                                      : 'Write custom instructions / অথবা কাস্টম নির্দেশনা লিখুন...'
+                                  }
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500"
+                                />
+                              </div>
+                            </div>
+
+                            {med.additionalNotes?.trim() && (
+                              <div className="text-[11px] text-teal-800 bg-teal-50/70 border border-teal-200/80 rounded-md px-2.5 py-1 flex items-center justify-between gap-2">
+                                <span>
+                                  <strong className="font-bold"> প্রিন্ট নোট (Note on Rx):</strong>{' '}
+                                  {med.additionalNotes}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => updateMedicineField(idx, 'additionalNotes', '')}
+                                  className="text-[10px] font-semibold text-rose-600 hover:underline cursor-pointer"
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   ))}
                 </div>
@@ -1933,7 +3033,8 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                             }
                             className="px-2 py-0.5 text-[11px] rounded bg-slate-100 hover:bg-cyan-50 hover:text-cyan-800 border border-slate-200 hover:border-cyan-300 text-slate-700 cursor-pointer"
                           >
-                            + {tp.testName} (৳{Number(tp.cost).toLocaleString()})
+                            + {tp.testName}
+                            {Number(tp.cost) > 0 ? ` (৳${Number(tp.cost).toLocaleString()})` : ''}
                           </button>
                         ))}
                       </div>
@@ -1994,7 +3095,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
 
                               <div className="sm:col-span-2">
                                 <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                                  Cost ৳ (Opt.)
+                                  Custom Rate ৳ (Opt.)
                                 </label>
                                 <input
                                   type="number"
@@ -2008,7 +3109,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                                       )
                                     )
                                   }
-                                  placeholder="Optional"
+                                  placeholder="Custom ৳ (Opt.)"
                                   className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-semibold"
                                 />
                               </div>

@@ -717,3 +717,64 @@ export const prescriptionCustomSectionsRelations = relations(
     }),
   })
 );
+
+// Doctor Salary Sheet Table (Monthly, Daily, or Commission-Based)
+export const doctorSalaries = pgTable(
+  'doctor_salaries',
+  {
+    id: serial('id').primaryKey(),
+    salaryCode: text('salary_code').notNull().unique(), // e.g. SAL-1001
+    doctorId: integer('doctor_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    salaryType: text('salary_type').notNull().default('Monthly'), // 'Monthly' | 'Daily' | 'Commission'
+    periodLabel: text('period_label').notNull(), // e.g. 'November 2026' or '01-11-2026 to 15-11-2026'
+    periodStart: text('period_start'), // YYYY-MM-DD
+    periodEnd: text('period_end'), // YYYY-MM-DD
+    baseAmount: numeric('base_amount', { precision: 12, scale: 2 }).notNull().default('0'), // Monthly salary or Daily rate or Base retainer
+    daysWorked: integer('days_worked').notNull().default(0), // Used for Daily salary
+    commissionBasis: text('commission_basis').default('collected'), // 'collected' | 'billed' | 'custom'
+    commissionSourceAmount: numeric('commission_source_amount', { precision: 12, scale: 2 })
+      .notNull()
+      .default('0'), // Total revenue/bill on which commission % is calculated
+    commissionRate: numeric('commission_rate', { precision: 6, scale: 2 })
+      .notNull()
+      .default('0'), // Percentage e.g. 30.00
+    commissionEarned: numeric('commission_earned', { precision: 12, scale: 2 })
+      .notNull()
+      .default('0'), // Calculated commission amount
+    bonusAmount: numeric('bonus_amount', { precision: 12, scale: 2 }).notNull().default('0'),
+    deductionAmount: numeric('deduction_amount', { precision: 12, scale: 2 })
+      .notNull()
+      .default('0'),
+    totalPayable: numeric('total_payable', { precision: 12, scale: 2 }).notNull().default('0'),
+    paidAmount: numeric('paid_amount', { precision: 12, scale: 2 }).notNull().default('0'),
+    dueAmount: numeric('due_amount', { precision: 12, scale: 2 }).notNull().default('0'),
+    paymentStatus: text('payment_status').notNull().default('Paid'), // 'Paid' | 'Partial' | 'Pending'
+    paymentMethod: text('payment_method').notNull().default('Cash'), // 'Cash' | 'bKash' | 'Nagad' | 'Bank transfer' | 'Other'
+    transactionRef: text('transaction_ref'),
+    paymentDate: text('payment_date').notNull(), // YYYY-MM-DD
+    notes: text('notes'),
+    recordedBy: integer('recorded_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+  },
+  (table) => [
+    index('idx_doctor_salaries_doctor_id').on(table.doctorId),
+    index('idx_doctor_salaries_type').on(table.salaryType),
+    index('idx_doctor_salaries_payment_date').on(table.paymentDate),
+    index('idx_doctor_salaries_status').on(table.paymentStatus),
+  ]
+);
+
+export const doctorSalariesRelations = relations(doctorSalaries, ({ one }) => ({
+  doctor: one(users, {
+    fields: [doctorSalaries.doctorId],
+    references: [users.id],
+  }),
+  recorder: one(users, {
+    fields: [doctorSalaries.recordedBy],
+    references: [users.id],
+  }),
+}));
+

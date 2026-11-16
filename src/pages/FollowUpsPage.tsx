@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { api } from '../services/api.ts';
 import { Appointment, Patient, SmsReminderLog } from '../types/index.ts';
+import { formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../utils/dateFormat.ts';
 import {
   Clock,
   CheckCircle2,
@@ -204,7 +205,7 @@ export const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ onSelectPatient })
     return smsTemplate
       .replace(/\{patientName\}/g, a.patientName || 'Patient')
       .replace(/\{patientId\}/g, a.patientCode || '')
-      .replace(/\{followUpDate\}/g, a.followUpDate)
+      .replace(/\{followUpDate\}/g, formatDateDDMMYYYY(a.followUpDate))
       .replace(/\{doctorName\}/g, a.doctorName || 'Doctor')
       .replace(/\{reason\}/g, a.reason || 'Dental checkup')
       .replace(/\{clinicName\}/g, clinicName)
@@ -448,7 +449,7 @@ export const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ onSelectPatient })
       .join(',');
     const bodyText = previewPatient
       ? formatMessageForAppointment(previewPatient)
-      : `Friendly reminder from ${clinicName}: You have a scheduled dental follow-up tomorrow (${tomorrowDateStr}). Contact: ${clinicPhone}.`;
+      : `Friendly reminder from ${clinicName}: You have a scheduled dental follow-up tomorrow (${formatDateDDMMYYYY(tomorrowDateStr)}). Contact: ${clinicPhone}.`;
     return `sms:${phones}?body=${encodeURIComponent(bodyText)}`;
   }, [selectedAppointments, previewPatient, smsTemplate, clinicName, clinicPhone, tomorrowDateStr]);
 
@@ -545,7 +546,7 @@ export const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ onSelectPatient })
               </span>
             </div>
             <p className="text-xs text-teal-100/90">
-              Select scheduled patients for tomorrow ({tomorrowDateStr}) or any date window and dispatch personalized reminders across 3 zero-fee channels.
+              Select scheduled patients for tomorrow ({formatDateDDMMYYYY(tomorrowDateStr)}) or any date window and dispatch personalized reminders across 3 zero-fee channels.
             </p>
           </div>
 
@@ -844,7 +845,7 @@ export const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ onSelectPatient })
                   1. Filter Follow-Up Date Window
                 </span>
                 <span className="text-[11px] text-slate-500 tabular-nums">
-                  Tomorrow: {tomorrowDateStr}
+                  Tomorrow: {formatDateDDMMYYYY(tomorrowDateStr)}
                 </span>
               </div>
 
@@ -998,14 +999,14 @@ export const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ onSelectPatient })
                   {smsLogs.map((log: any) => (
                     <tr key={log.id} className="hover:bg-slate-50">
                       <td className="py-2 px-3 whitespace-nowrap text-slate-500 tabular-nums">
-                        {new Date(log.sentAt).toLocaleString()}
+                        {formatDateTimeDDMMYYYY(log.sentAt)}
                       </td>
                       <td className="py-2 px-3 whitespace-nowrap">
                         <div className="font-semibold text-slate-900">{log.patientName}</div>
                         <div className="text-[11px] text-slate-500 tabular-nums">{log.patientPhone}</div>
                       </td>
                       <td className="py-2 px-3 whitespace-nowrap font-medium text-teal-700 tabular-nums">
-                        {log.followUpDate}
+                        {formatDateDDMMYYYY(log.followUpDate)}
                       </td>
                       <td className="py-2 px-3 whitespace-nowrap">
                         <span
@@ -1097,7 +1098,7 @@ export const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ onSelectPatient })
                       {a.smsReminderSent ? (
                         <span
                           className="text-emerald-700 flex items-center gap-1 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200"
-                          title={`Notified: ${a.lastSmsSentAt ? new Date(a.lastSmsSentAt).toLocaleString() : ''}`}
+                          title={`Notified: ${a.lastSmsSentAt ? formatDateTimeDDMMYYYY(a.lastSmsSentAt) : ''}`}
                         >
                           <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                           <span>Notified ({a.smsSentCount || 1})</span>
@@ -1138,7 +1139,7 @@ export const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ onSelectPatient })
                     <div className="flex items-center justify-between gap-2 font-bold text-slate-800">
                       <span className="flex items-center gap-1.5">
                         <Clock className="w-3.5 h-3.5 text-teal-600" />
-                        <span className="tabular-nums">{a.followUpDate}</span>
+                        <span className="tabular-nums">{formatDateDDMMYYYY(a.followUpDate)}</span>
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5 text-slate-600">
@@ -1230,7 +1231,7 @@ export const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ onSelectPatient })
               No follow-ups found for the selected filter window.
             </div>
             <p className="text-xs text-slate-500">
-              Try switching the date filter to &ldquo;All&rdquo; or schedule a new follow-up for tomorrow ({tomorrowDateStr}).
+              Try switching the date filter to &ldquo;All&rdquo; or schedule a new follow-up for tomorrow ({formatDateDDMMYYYY(tomorrowDateStr)}).
             </p>
             <div className="flex items-center justify-center gap-2 pt-1">
               {dateWindow !== 'all' && (
@@ -1304,7 +1305,7 @@ export const FollowUpsPage: React.FC<FollowUpsPageProps> = ({ onSelectPatient })
                     {activeQueuePatient.patientCode}
                   </span>
                   <span className="text-xs font-semibold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                    Follow-Up: {activeQueuePatient.followUpDate}
+                    Follow-Up: {formatDateDDMMYYYY(activeQueuePatient.followUpDate)}
                   </span>
                 </div>
 

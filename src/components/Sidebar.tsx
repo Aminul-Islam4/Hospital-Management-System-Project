@@ -14,6 +14,7 @@ import {
   MessageSquare,
   Code,
   FileText,
+  Wallet,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -39,7 +40,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
     { id: 'payments', label: 'Payments & Dues', shortLabel: 'Payments', icon: CreditCard },
     { id: 'followups', label: 'Follow-ups & SMS', shortLabel: 'SMS Hub', icon: MessageSquare, badge: 'SMS' },
     ...(isSuperAdmin
-      ? [{ id: 'doctors', label: 'Doctor Accounts', shortLabel: 'Doctors', icon: UserCheck }]
+      ? [
+          { id: 'doctors', label: 'Doctor Accounts', shortLabel: 'Doctors', icon: UserCheck },
+          { id: 'salary-sheet', label: 'Doctor Salary Sheet', shortLabel: 'Salary Sheet', icon: Wallet, badge: 'Salary' },
+        ]
       : []),
     { id: 'exports', label: 'CSV Exports', shortLabel: 'Exports', icon: FileSpreadsheet },
     ...(isSuperAdmin

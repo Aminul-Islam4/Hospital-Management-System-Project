@@ -11,11 +11,11 @@ interface AddTestModalProps {
 }
 
 const PRESET_TESTS = [
-  { name: 'Intraoral Periapical Radiograph (IOPA)', category: 'IOPA', cost: 300 },
-  { name: 'Orthopantomogram (OPG - Full Panoramic)', category: 'OPG', cost: 1200 },
-  { name: 'Cone Beam CT (CBCT - Single Jaw)', category: 'CBCT', cost: 3500 },
-  { name: 'Bite-wing Radiograph (Left/Right)', category: 'Dental X-ray', cost: 400 },
-  { name: 'Random Blood Sugar (RBS) Test', category: 'Other', cost: 200 },
+  { name: 'Intraoral Periapical Radiograph (IOPA)', category: 'IOPA', cost: '' },
+  { name: 'Orthopantomogram (OPG - Full Panoramic)', category: 'OPG', cost: '' },
+  { name: 'Cone Beam CT (CBCT - Single Jaw)', category: 'CBCT', cost: '' },
+  { name: 'Bite-wing Radiograph (Left/Right)', category: 'Dental X-ray', cost: '' },
+  { name: 'Random Blood Sugar (RBS) Test', category: 'Other', cost: '' },
 ];
 
 export const AddTestModal: React.FC<AddTestModalProps> = ({
@@ -28,7 +28,7 @@ export const AddTestModal: React.FC<AddTestModalProps> = ({
   const [testName, setTestName] = useState('');
   const [category, setCategory] = useState<'Dental X-ray' | 'OPG' | 'IOPA' | 'CBCT' | 'Other'>('Dental X-ray');
   const [description, setDescription] = useState('');
-  const [cost, setCost] = useState('0');
+  const [cost, setCost] = useState('');
   const [status, setStatus] = useState('Completed');
   const [notes, setNotes] = useState('');
 
@@ -40,7 +40,7 @@ export const AddTestModal: React.FC<AddTestModalProps> = ({
       setTestName('');
       setCategory('Dental X-ray');
       setDescription('');
-      setCost('0');
+      setCost('');
       setStatus('Completed');
       setNotes('');
       setError(null);
@@ -50,10 +50,10 @@ export const AddTestModal: React.FC<AddTestModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSelectPreset = (item: { name: string; category: string; cost: number }) => {
+  const handleSelectPreset = (item: { name: string; category: string; cost?: string | number }) => {
     setTestName(item.name);
     setCategory(item.category as any);
-    setCost(item.cost.toString());
+    setCost(item.cost ? String(item.cost) : '');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -69,7 +69,7 @@ export const AddTestModal: React.FC<AddTestModalProps> = ({
         testName: testName.trim(),
         category,
         description: description.trim() || undefined,
-        cost,
+        cost: cost.trim() ? cost.trim() : '0',
         status,
         notes: notes.trim() || undefined,
       });
@@ -122,7 +122,7 @@ export const AddTestModal: React.FC<AddTestModalProps> = ({
                   onClick={() => handleSelectPreset(pt)}
                   className="px-2 py-0.5 rounded bg-slate-100 hover:bg-cyan-50 hover:text-cyan-700 hover:border-cyan-300 border border-slate-200 text-slate-700 transition-colors cursor-pointer"
                 >
-                  {pt.name} (৳{pt.cost})
+                  + {pt.name}
                 </button>
               ))}
             </div>
@@ -155,12 +155,13 @@ export const AddTestModal: React.FC<AddTestModalProps> = ({
             </div>
             <div>
               <label className="block font-semibold text-slate-700 mb-1">
-                Investigation Cost (৳ BDT) *
+                Custom Rate (৳ Opt.)
               </label>
               <input
                 type="number"
                 min="0"
-                required
+                step="any"
+                placeholder="Custom ৳ (Opt.)"
                 value={cost}
                 onChange={(e) => setCost(e.target.value)}
                 className="w-full px-2.5 py-1.5 border border-slate-300 rounded font-bold text-slate-900 focus:ring-2 focus:ring-cyan-500"
