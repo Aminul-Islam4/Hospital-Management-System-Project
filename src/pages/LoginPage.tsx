@@ -9,7 +9,6 @@ import {
   Code,
   Stethoscope,
   AlertCircle,
-  CheckCircle2,
 } from 'lucide-react';
 
 export const LoginPage: React.FC = () => {
@@ -57,24 +56,24 @@ export const LoginPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-slate-900 flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
         <div className="mx-auto w-14 h-14 rounded-2xl bg-teal-600 flex items-center justify-center text-white shadow-xl mb-4">
           <Activity className="w-8 h-8" />
         </div>
         <h2 className="text-2xl font-extrabold text-white tracking-tight">
-          Dental Patient Tracking &amp; Management
+          Dental Care
         </h2>
         <p className="mt-1 text-xs text-teal-300 font-semibold uppercase tracking-wider">
-          Dhaka Dental Care &amp; Implant Center • V1.0 (BDT ৳)
+          Patient Tracking &amp; Multi-Doctor Management • BDT ৳
         </p>
         <p className="mt-1 text-xs text-slate-400">
-          Centralized Patient Records Shared Across All Clinic Doctors
+          Centralized Patient Records &amp; Pre-Day Follow-Up SMS System · Lead Developer: <strong className="text-teal-300">Aymon</strong>
         </p>
       </div>
 
-      <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md px-4 sm:px-0">
-        <div className="bg-white py-8 px-6 sm:px-8 shadow-2xl rounded-2xl border border-slate-200 space-y-6">
+      <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md">
+        <div className="bg-white py-7 px-5 sm:px-8 shadow-2xl rounded-2xl border border-slate-200 space-y-5">
           {error && (
             <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -95,9 +94,9 @@ export const LoginPage: React.FC = () => {
                   placeholder="e.g. maindoctor or dr_rahim"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  className="w-full pl-9 pr-3 py-2.5 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
-                <UserIcon className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                <UserIcon className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
               </div>
             </div>
 
@@ -112,9 +111,9 @@ export const LoginPage: React.FC = () => {
                   placeholder="Enter password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  className="w-full pl-9 pr-3 py-2.5 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
-                <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
               </div>
             </div>
 
@@ -123,7 +122,7 @@ export const LoginPage: React.FC = () => {
               disabled={loading}
               className="w-full py-2.5 px-4 text-sm font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-lg shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
             >
-              <span>{loading ? 'Authenticating...' : 'Sign In to Clinic Portal'}</span>
+              <span>{loading ? 'Authenticating...' : 'Sign In to Dental Care'}</span>
             </button>
           </form>
 
@@ -141,7 +140,7 @@ export const LoginPage: React.FC = () => {
             type="button"
             onClick={handleGoogleLogin}
             disabled={loading}
-            className="w-full py-2 px-4 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            className="w-full py-2.5 px-4 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24">
               <path
@@ -168,82 +167,82 @@ export const LoginPage: React.FC = () => {
           <div className="pt-2 border-t border-slate-200">
             <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 mb-2">
               <Sparkles className="w-3.5 h-3.5 text-teal-600" />
-              <span>1-Click Test Login (Mandatory Scenario Test):</span>
+              <span>1-Click Role Switch / Quick Login:</span>
             </div>
             <div className="grid grid-cols-1 gap-1.5 text-xs">
               <button
                 type="button"
                 onClick={() => handleQuickLogin('maindoctor')}
-                className="w-full text-left p-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-900 transition-colors flex items-center justify-between cursor-pointer"
+                className="w-full text-left p-2.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-900 transition-colors flex items-center justify-between cursor-pointer"
               >
                 <div className="flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-emerald-600" />
+                  <Shield className="w-4 h-4 text-emerald-600 shrink-0" />
                   <div>
                     <div className="font-bold">Prof. Dr. Rahman (Main Doctor)</div>
                     <div className="text-[11px] text-emerald-700">Super Admin • All Modules</div>
                   </div>
                 </div>
-                <span className="text-[10px] font-bold bg-emerald-200/80 px-2 py-0.5 rounded text-emerald-800">1-Click</span>
+                <span className="text-[10px] font-bold bg-emerald-200/80 px-2 py-0.5 rounded text-emerald-800 shrink-0">1-Click</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleQuickLogin('dr_rahim')}
-                className="w-full text-left p-2 rounded-lg bg-teal-50 hover:bg-teal-100 border border-teal-200 text-teal-900 transition-colors flex items-center justify-between cursor-pointer"
+                className="w-full text-left p-2.5 rounded-lg bg-teal-50 hover:bg-teal-100 border border-teal-200 text-teal-900 transition-colors flex items-center justify-between cursor-pointer"
               >
                 <div className="flex items-center gap-2">
-                  <Stethoscope className="w-4 h-4 text-teal-600" />
+                  <Stethoscope className="w-4 h-4 text-teal-600 shrink-0" />
                   <div>
                     <div className="font-bold">Doctor A (Dr. Rahim Chowdhury)</div>
                     <div className="text-[11px] text-teal-700">Created 1st Visit (Exam &amp; IOPA)</div>
                   </div>
                 </div>
-                <span className="text-[10px] font-bold bg-teal-200/80 px-2 py-0.5 rounded text-teal-800">1-Click</span>
+                <span className="text-[10px] font-bold bg-teal-200/80 px-2 py-0.5 rounded text-teal-800 shrink-0">1-Click</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleQuickLogin('dr_fatima')}
-                className="w-full text-left p-2 rounded-lg bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 text-cyan-900 transition-colors flex items-center justify-between cursor-pointer"
+                className="w-full text-left p-2.5 rounded-lg bg-cyan-50 hover:bg-cyan-100 border border-cyan-200 text-cyan-900 transition-colors flex items-center justify-between cursor-pointer"
               >
                 <div className="flex items-center gap-2">
-                  <Stethoscope className="w-4 h-4 text-cyan-600" />
+                  <Stethoscope className="w-4 h-4 text-cyan-600 shrink-0" />
                   <div>
                     <div className="font-bold">Doctor B (Dr. Fatima Akter)</div>
                     <div className="text-[11px] text-cyan-700">Views Doc A notes &bull; RCT</div>
                   </div>
                 </div>
-                <span className="text-[10px] font-bold bg-cyan-200/80 px-2 py-0.5 rounded text-cyan-800">1-Click</span>
+                <span className="text-[10px] font-bold bg-cyan-200/80 px-2 py-0.5 rounded text-cyan-800 shrink-0">1-Click</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleQuickLogin('dr_tariq')}
-                className="w-full text-left p-2 rounded-lg bg-sky-50 hover:bg-sky-100 border border-sky-200 text-sky-900 transition-colors flex items-center justify-between cursor-pointer"
+                className="w-full text-left p-2.5 rounded-lg bg-sky-50 hover:bg-sky-100 border border-sky-200 text-sky-900 transition-colors flex items-center justify-between cursor-pointer"
               >
                 <div className="flex items-center gap-2">
-                  <Stethoscope className="w-4 h-4 text-sky-600" />
+                  <Stethoscope className="w-4 h-4 text-sky-600 shrink-0" />
                   <div>
                     <div className="font-bold">Doctor C (Dr. Tariqul Islam)</div>
                     <div className="text-[11px] text-sky-700">Views Doc A &amp; B &bull; Crown &amp; OPG</div>
                   </div>
                 </div>
-                <span className="text-[10px] font-bold bg-sky-200/80 px-2 py-0.5 rounded text-sky-800">1-Click</span>
+                <span className="text-[10px] font-bold bg-sky-200/80 px-2 py-0.5 rounded text-sky-800 shrink-0">1-Click</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleQuickLogin('dev_admin')}
-                className="w-full text-left p-2 rounded-lg bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-900 transition-colors flex items-center justify-between cursor-pointer"
+                className="w-full text-left p-2.5 rounded-lg bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-900 transition-colors flex items-center justify-between cursor-pointer"
               >
                 <div className="flex items-center gap-2">
-                  <Code className="w-4 h-4 text-purple-600" />
+                  <Code className="w-4 h-4 text-purple-600 shrink-0" />
                   <div>
-                    <div className="font-bold">Developer (Farhan Ahmed)</div>
+                    <div className="font-bold">Lead Developer (Aymon)</div>
                     <div className="text-[11px] text-purple-700">Full System &bull; Database Backup</div>
                   </div>
                 </div>
-                <span className="text-[10px] font-bold bg-purple-200/80 px-2 py-0.5 rounded text-purple-800">1-Click</span>
+                <span className="text-[10px] font-bold bg-purple-200/80 px-2 py-0.5 rounded text-purple-800 shrink-0">1-Click</span>
               </button>
             </div>
           </div>

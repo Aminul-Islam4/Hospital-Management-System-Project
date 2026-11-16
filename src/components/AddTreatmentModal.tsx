@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { api } from '../services/api.ts';
 import { X, Stethoscope, CheckCircle2, AlertCircle } from 'lucide-react';
 
@@ -39,6 +39,19 @@ export const AddTreatmentModal: React.FC<AddTreatmentModalProps> = ({
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setTreatmentName('');
+      setDescription('');
+      setToothNumber('');
+      setCost('0');
+      setStatus('Completed');
+      setNotes('');
+      setError(null);
+      setLoading(false);
+    }
+  }, [isOpen, visitId]);
 
   if (!isOpen) return null;
 

@@ -1,0 +1,2075 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { useAuth } from '../context/AuthContext.tsx';
+import { api } from '../services/api.ts';
+import {
+  CatalogMedicine,
+  DoctorClinicalHeading,
+  Patient,
+  PatientDetailedProfile,
+  Prescription,
+  PrescriptionAdvisedTestItem,
+  PrescriptionCustomSection,
+  PrescriptionMedicine,
+  PrescriptionTreatmentPlanItem,
+  User,
+} from '../types/index.ts';
+import { BANGLA_CARE_CATEGORIES, formatBanglaDate } from '../utils/prescriptionPdf.ts';
+import {
+  X,
+  Plus,
+  Trash2,
+  Pill,
+  Stethoscope,
+  User as UserIcon,
+  CalendarCheck,
+  AlertTriangle,
+  CheckCircle2,
+  Eye,
+  Save,
+  Sparkles,
+  Search,
+  ShieldAlert,
+  Loader2,
+  ChevronDown,
+  ClipboardList,
+  Radio,
+  ArrowUp,
+  ArrowDown,
+  BookmarkCheck,
+} from 'lucide-react';
+
+interface PrescriptionFormModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  patientId?: number | null;
+  defaultVisitId?: number | null;
+  editingPrescription?: Prescription | null;
+  onSaved: (rx: Prescription, openPreview?: boolean) => void;
+}
+
+const emptyMedicine = (): PrescriptionMedicine => ({
+  medicineId: null,
+  medicineName: '',
+  genericName: '',
+  strength: '',
+  dosageType: '',
+  manufacturer: '',
+  packageMark: '',
+  dosage: '',
+  frequency: '',
+  duration: '',
+  mealInstructions: '',
+  additionalNotes: '',
+});
+
+const FREQUENCY_HELPERS = ['1+0+1', '1+1+1', '1+0+0', '0+0+1', 'দিনে ৩ বার', 'দিনে ২ বার', 'প্রয়োজনে'];
+
+const MEAL_OPTIONS = [
+  'After meals',
+  'Before meals',
+  'With food',
+  'At bedtime',
+  'খাবারের পরে',
+  'খাবারের ৩০ মিনিট আগে',
+  'ঘুমানোর আগে',
+];
+
+const QUICK_TREATMENT_PLAN_PRESETS = [
+  { treatmentName: 'Dental Examination & Consultation', cost: '500' },
+  { treatmentName: 'Composite Dental Filling', cost: '1500' },
+  { treatmentName: 'Root Canal Treatment (RCT - Molar)', cost: '5000' },
+  { treatmentName: 'Root Canal Treatment (RCT - Anterior)', cost: '3500' },
+  { treatmentName: 'Tooth Extraction (Simple)', cost: '1200' },
+  { treatmentName: 'Surgical Disimpaction (Wisdom Tooth)', cost: '6000' },
+  { treatmentName: 'Ultrasonic Scaling & Polishing', cost: '2000' },
+  { treatmentName: 'Porcelain Fused to Metal (PFM) Crown', cost: '4500' },
+  { treatmentName: 'All-Ceramic Zirconia Crown', cost: '8500' },
+];
+
+const QUICK_ADVISED_TEST_PRESETS = [
+  { testName: 'Intraoral Periapical Radiograph (IOPA)', category: 'IOPA', cost: '300' },
+  { testName: 'Orthopantomogram (OPG - Full Panoramic)', category: 'OPG', cost: '1200' },
+  { testName: 'Cone Beam CT (CBCT - Single Jaw)', category: 'CBCT', cost: '3500' },
+  { testName: 'Bite-wing Radiograph (Left/Right)', category: 'Dental X-ray', cost: '400' },
+  { testName: 'Random Blood Sugar (RBS) Test', category: 'Lab / Blood', cost: '200' },
+];
+
+const emptyTreatmentPlanItem = (): PrescriptionTreatmentPlanItem => ({
+  treatmentName: '',
+  toothNumber: '',
+  cost: '',
+  notes: '',
+});
+
+const emptyAdvisedTestItem = (): PrescriptionAdvisedTestItem => ({
+  testName: '',
+  category: 'Dental X-ray',
+  cost: '',
+  notes: '',
+});
+
+const PERSONALIZED_HEADING_PRESETS = [
+  'History',
+  'On Examinations',
+  'Investigations',
+  'Past Medical History',
+  'Drug / Allergy History',
+  'Differential Diagnosis',
+  'Provisional Diagnosis',
+  'Clinical Advice',
+];
+
+const BANGLA_DENTAL_PRESETS: Record<string, string> = {
+  oralHygieneInstructions:
+    'প্রতিবার খাবারের পর কুসুম গরম লবণ পানি দিয়ে আলতোভাবে কুলকুচি করুন এবং মুখ পরিষ্কার রাখুন।',
+  toothBrushingInstructions:
+    'নরম ব্রাশ দিয়ে দিনে দুবার (সকাল ও রাতে) হালকাভাবে দাঁত ব্রাশ করুন; চিকিৎসা করা স্থানে অতিরিক্ত চাপ দেবেন না।',
+  mouthwashRecommendations:
+    'ক্লোরহেক্সিডিন ০.২% মাউথওয়াশ (১০ মি.লি.) দিয়ে ব্রাশ করার ৩০ মিনিট পর দিনে ২ বার ৩০ সেকেন্ড কুলকুচি করে ফেলে দিন (৭ দিন)।',
+  postExtractionInstructions:
+    'তুলা বা গজ ৪৫ মিনিট কামড়ে ধরে রাখুন। প্রথম ২৪ ঘণ্টা থুথু ফেলবেন না, জোরে কুলকুচি করবেন না এবং স্ট্র ব্যবহার করবেন না। ফোলা কমাতে বাইরে থেকে বরফ সেঁক দিন।',
+  postTreatmentPrecautions:
+    'অবশ ভাব থাকা অবস্থায় আক্রান্ত পাশে চিবাবেন না বা গরম খাবার খাবেন না। তীব্র ব্যথা বা অতিরিক্ত ফোলা দেখা দিলে দ্রুত ক্লিনিকে যোগাযোগ করুন।',
+  dietaryRecommendations:
+    'প্রথম ২৪–৪৮ ঘণ্টা নরম, ঠান্ডা বা স্বাভাবিক তাপমাত্রার খাবার খান। শক্ত, আঠালো, ঝাল ও অতিরিক্ত গরম খাবার এড়িয়ে চলুন।',
+  additionalClinicalAdvice:
+    'অ্যান্টিবায়োটিকের সম্পূর্ণ কোর্স সময়মতো শেষ করুন এবং নির্ধারিত তারিখে ফলো-আপের জন্য উপস্থিত হোন।',
+};
+
+export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
+  isOpen,
+  onClose,
+  patientId,
+  defaultVisitId,
+  editingPrescription,
+  onSaved,
+}) => {
+  const { user } = useAuth();
+  const isSuper = user?.role === 'main_doctor' || user?.role === 'developer';
+
+  const [selectedPatientId, setSelectedPatientId] = useState<number | null>(
+    editingPrescription?.patientId || patientId || null
+  );
+  const [patientSearchQuery, setPatientSearchQuery] = useState('');
+  const [patientSearchResults, setPatientSearchResults] = useState<Patient[]>([]);
+  const [searchingPatients, setSearchingPatients] = useState(false);
+
+  const [patientProfile, setPatientProfile] = useState<PatientDetailedProfile | null>(null);
+  const [doctors, setDoctors] = useState<User[]>([]);
+  const [clinicSettings, setClinicSettings] = useState<Record<string, string>>({});
+  const [loadingProfile, setLoadingProfile] = useState(false);
+
+  // Clinical Form Fields (English clinical labels)
+  const [visitId, setVisitId] = useState<number | ''>('');
+  const [doctorId, setDoctorId] = useState<number>(user?.id || 0);
+  const [prescriptionDate, setPrescriptionDate] = useState<string>(
+    new Date().toISOString().split('T')[0]
+  );
+  const [chiefComplaints, setChiefComplaints] = useState('');
+  const [clinicalFindings, setClinicalFindings] = useState('');
+  const [diagnosis, setDiagnosis] = useState('');
+  const [treatmentPlan, setTreatmentPlan] = useState('');
+  const [followUpDate, setFollowUpDate] = useState('');
+
+  // Dynamic Medicines + Smart Local Catalog Autocomplete
+  const [medicines, setMedicines] = useState<PrescriptionMedicine[]>([emptyMedicine()]);
+  const [activeMedIdx, setActiveMedIdx] = useState<number | null>(null);
+  const [medResults, setMedResults] = useState<CatalogMedicine[]>([]);
+  const [medTotalCount, setMedTotalCount] = useState(0);
+  const [medHasMore, setMedHasMore] = useState(false);
+  const [searchingMeds, setSearchingMeds] = useState(false);
+  const [loadingMoreMeds, setLoadingMoreMeds] = useState(false);
+  const [highlightedSugIdx, setHighlightedSugIdx] = useState<number>(-1);
+  const [activeMedQuery, setActiveMedQuery] = useState('');
+  const medSearchTimerRef = useRef<any>(null);
+
+  // Optional Treatment Plan Items & Advised Diagnostic Tests (with optional cost)
+  const [treatmentPlanItems, setTreatmentPlanItems] = useState<PrescriptionTreatmentPlanItem[]>([]);
+  const [advisedTests, setAdvisedTests] = useState<PrescriptionAdvisedTestItem[]>([]);
+  const [showPlanCosts, setShowPlanCosts] = useState<boolean>(true);
+  const [showOptionalSections, setShowOptionalSections] = useState<boolean>(false);
+
+  // Personalized Doctor Clinical Headings (History, On Examinations, Investigations, etc.)
+  const [customSections, setCustomSections] = useState<PrescriptionCustomSection[]>([]);
+  const [savedDoctorHeadings, setSavedDoctorHeadings] = useState<DoctorClinicalHeading[]>([]);
+  const [newHeadingInput, setNewHeadingInput] = useState('');
+  const [savingHeadings, setSavingHeadings] = useState(false);
+  const [headingsNotice, setHeadingsNotice] = useState<string | null>(null);
+
+  // Bangla Care Instructions Fields
+  const [oralHygieneInstructions, setOralHygieneInstructions] = useState('');
+  const [toothBrushingInstructions, setToothBrushingInstructions] = useState('');
+  const [mouthwashRecommendations, setMouthwashRecommendations] = useState('');
+  const [postExtractionInstructions, setPostExtractionInstructions] = useState('');
+  const [postTreatmentPrecautions, setPostTreatmentPrecautions] = useState('');
+  const [dietaryRecommendations, setDietaryRecommendations] = useState('');
+  const [additionalClinicalAdvice, setAdditionalClinicalAdvice] = useState('');
+
+  // Submission states
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const idempotencyKeyRef = useRef<string>('');
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    idempotencyKeyRef.current = `rx-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    setError(null);
+    setActiveMedIdx(null);
+    setMedResults([]);
+
+    api.getSettings().then(setClinicSettings).catch(() => {});
+    if (isSuper) {
+      api.getDoctors().then(setDoctors).catch(() => {});
+    }
+
+    if (editingPrescription) {
+      setSelectedPatientId(editingPrescription.patientId);
+      setVisitId(editingPrescription.visitId);
+      setDoctorId(editingPrescription.doctorId);
+      setPrescriptionDate(
+        editingPrescription.prescriptionDate || new Date().toISOString().split('T')[0]
+      );
+      setChiefComplaints(editingPrescription.chiefComplaints || '');
+      setClinicalFindings(editingPrescription.clinicalFindings || '');
+      setDiagnosis(editingPrescription.diagnosis || '');
+      setTreatmentPlan(editingPrescription.treatmentPlan || '');
+      setFollowUpDate(editingPrescription.followUpDate || '');
+      setOralHygieneInstructions(editingPrescription.oralHygieneInstructions || '');
+      setToothBrushingInstructions(editingPrescription.toothBrushingInstructions || '');
+      setMouthwashRecommendations(editingPrescription.mouthwashRecommendations || '');
+      setPostExtractionInstructions(editingPrescription.postExtractionInstructions || '');
+      setPostTreatmentPrecautions(editingPrescription.postTreatmentPrecautions || '');
+      setDietaryRecommendations(editingPrescription.dietaryRecommendations || '');
+      setAdditionalClinicalAdvice(editingPrescription.additionalClinicalAdvice || '');
+      setMedicines(
+        editingPrescription.medicines && editingPrescription.medicines.length > 0
+          ? editingPrescription.medicines.map((m) => ({
+              medicineId: m.medicineId ?? null,
+              medicineName: m.medicineName || '',
+              genericName: m.genericName || '',
+              strength: m.strength || '',
+              dosageType: m.dosageType || '',
+              manufacturer: m.manufacturer || '',
+              packageMark: m.packageMark || '',
+              dosage: m.dosage || '',
+              frequency: m.frequency || '',
+              duration: m.duration || '',
+              mealInstructions: m.mealInstructions || '',
+              additionalNotes: m.additionalNotes || '',
+            }))
+          : [emptyMedicine()]
+      );
+      const editPlans = (editingPrescription.treatmentPlanItems || []).map((p) => ({
+        treatmentName: p.treatmentName || '',
+        toothNumber: p.toothNumber || '',
+        cost: p.cost !== null && p.cost !== undefined ? String(parseFloat(p.cost)) : '',
+        notes: p.notes || '',
+      }));
+      const editTests = (editingPrescription.advisedTests || []).map((t) => ({
+        testName: t.testName || '',
+        category: t.category || 'Dental X-ray',
+        cost: t.cost !== null && t.cost !== undefined ? String(parseFloat(t.cost)) : '',
+        notes: t.notes || '',
+      }));
+      setTreatmentPlanItems(editPlans);
+      setAdvisedTests(editTests);
+      setShowPlanCosts(editingPrescription.showPlanCosts !== false);
+      setShowOptionalSections(editPlans.length > 0 || editTests.length > 0);
+      setCustomSections(
+        (editingPrescription.customSections || []).map((s) => ({
+          heading: s.heading || '',
+          content: s.content || '',
+        }))
+      );
+      setNewHeadingInput('');
+      setHeadingsNotice(null);
+    } else {
+      setSelectedPatientId(patientId || null);
+      setVisitId(defaultVisitId || '');
+      setDoctorId(user?.id || 0);
+      setPrescriptionDate(new Date().toISOString().split('T')[0]);
+      setChiefComplaints('');
+      setClinicalFindings('');
+      setDiagnosis('');
+      setTreatmentPlan('');
+      setFollowUpDate('');
+      setOralHygieneInstructions('');
+      setToothBrushingInstructions('');
+      setMouthwashRecommendations('');
+      setPostExtractionInstructions('');
+      setPostTreatmentPrecautions('');
+      setDietaryRecommendations('');
+      setAdditionalClinicalAdvice('');
+      setMedicines([emptyMedicine()]);
+      setTreatmentPlanItems([]);
+      setAdvisedTests([]);
+      setShowPlanCosts(true);
+      setShowOptionalSections(false);
+      setCustomSections([]);
+      setNewHeadingInput('');
+      setHeadingsNotice(null);
+    }
+  }, [isOpen, patientId, defaultVisitId, editingPrescription, user?.id]);
+
+  // Load doctor's saved personalized headings when modal opens or doctor changes
+  useEffect(() => {
+    if (!isOpen) return;
+    const targetDocId = editingPrescription
+      ? editingPrescription.doctorId
+      : isSuper && doctorId
+      ? doctorId
+      : user?.id;
+    if (!targetDocId) return;
+
+    let cancelled = false;
+    api
+      .getDoctorClinicalHeadings(targetDocId)
+      .then((rows) => {
+        if (cancelled) return;
+        setSavedDoctorHeadings(rows);
+        if (!editingPrescription) {
+          setCustomSections((prev) => {
+            const hasTypedContent = prev.some((s) => s.content.trim().length > 0);
+            if (hasTypedContent || prev.length > 0) return prev;
+            return rows.map((h) => ({ heading: h.heading, content: '' }));
+          });
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, editingPrescription?.id, doctorId, user?.id, isSuper]);
+
+  // Search patients if opened without preselected patient
+  useEffect(() => {
+    if (!isOpen || selectedPatientId) return;
+    const t = setTimeout(async () => {
+      setSearchingPatients(true);
+      try {
+        const list = await api.getPatients({ search: patientSearchQuery.trim() || undefined });
+        setPatientSearchResults(list.slice(0, 8));
+      } catch {
+      } finally {
+        setSearchingPatients(false);
+      }
+    }, 180);
+    return () => clearTimeout(t);
+  }, [isOpen, selectedPatientId, patientSearchQuery]);
+
+  // Load full patient profile & visits when patient selected
+  useEffect(() => {
+    if (!isOpen || !selectedPatientId) {
+      setPatientProfile(null);
+      return;
+    }
+
+    setLoadingProfile(true);
+    api
+      .getPatient(selectedPatientId)
+      .then((profile) => {
+        setPatientProfile(profile);
+        if (!editingPrescription && profile.visits.length > 0) {
+          const targetVisit =
+            (defaultVisitId
+              ? profile.visits.find((v) => v.id === defaultVisitId)
+              : null) || profile.visits[0];
+          setVisitId(targetVisit.id);
+          setChiefComplaints((prev) => prev || targetVisit.complaints || '');
+          setDiagnosis((prev) => prev || targetVisit.diagnosis || '');
+          setFollowUpDate((prev) => prev || targetVisit.nextFollowUpDate || '');
+        }
+      })
+      .catch((err) => setError(err.message || 'Failed to load patient details'))
+      .finally(() => setLoadingProfile(false));
+  }, [isOpen, selectedPatientId]);
+
+  if (!isOpen) return null;
+
+  const handleVisitChange = (newVisitId: number) => {
+    setVisitId(newVisitId);
+    if (!editingPrescription && patientProfile) {
+      const matched = patientProfile.visits.find((v) => v.id === newVisitId);
+      if (matched) {
+        if (!chiefComplaints.trim()) setChiefComplaints(matched.complaints || '');
+        if (!diagnosis.trim()) setDiagnosis(matched.diagnosis || '');
+        if (!followUpDate.trim()) setFollowUpDate(matched.nextFollowUpDate || '');
+      }
+    }
+  };
+
+  const syncFromSelectedVisit = () => {
+    if (!patientProfile || !visitId) return;
+    const matched = patientProfile.visits.find((v) => v.id === Number(visitId));
+    if (matched) {
+      setChiefComplaints(matched.complaints || '');
+      setDiagnosis(matched.diagnosis || '');
+      if (matched.nextFollowUpDate) setFollowUpDate(matched.nextFollowUpDate);
+    }
+  };
+
+  // 250ms debounced local PostgreSQL medicine catalog autocomplete
+  const triggerCatalogSearch = (idx: number, rawQ: string) => {
+    setActiveMedIdx(idx);
+    setActiveMedQuery(rawQ);
+    setHighlightedSugIdx(-1);
+
+    if (medSearchTimerRef.current) clearTimeout(medSearchTimerRef.current);
+
+    if (!rawQ.trim()) {
+      // Initial browse of top 10 active products on focus, or clear smoothly
+      medSearchTimerRef.current = setTimeout(async () => {
+        setSearchingMeds(true);
+        try {
+          const res = await api.searchMedicines('', 10, 0);
+          setMedResults(res.items);
+          setMedTotalCount(res.totalCount);
+          setMedHasMore(res.hasMore);
+        } catch {
+          setMedResults([]);
+          setMedHasMore(false);
+        } finally {
+          setSearchingMeds(false);
+        }
+      }, 150);
+      return;
+    }
+
+    setSearchingMeds(true);
+    medSearchTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await api.searchMedicines(rawQ.trim(), 10, 0);
+        setMedResults(res.items);
+        setMedTotalCount(res.totalCount);
+        setMedHasMore(res.hasMore);
+        setHighlightedSugIdx(res.items.length > 0 ? 0 : -1);
+      } catch {
+        setMedResults([]);
+        setMedTotalCount(0);
+        setMedHasMore(false);
+      } finally {
+        setSearchingMeds(false);
+      }
+    }, 250);
+  };
+
+  const handleLoadMoreCatalog = async () => {
+    if (loadingMoreMeds || !medHasMore) return;
+    setLoadingMoreMeds(true);
+    try {
+      const res = await api.searchMedicines(activeMedQuery.trim(), 10, medResults.length);
+      setMedResults((prev) => [...prev, ...res.items]);
+      setMedTotalCount(res.totalCount);
+      setMedHasMore(res.hasMore);
+    } catch {
+    } finally {
+      setLoadingMoreMeds(false);
+    }
+  };
+
+  const updateMedicineField = (
+    idx: number,
+    field: keyof PrescriptionMedicine,
+    val: string
+  ) => {
+    setMedicines((prev) =>
+      prev.map((m, i) => {
+        if (i !== idx) return m;
+        // If doctor manually edits the medicine name, detach catalog link so custom name isn't misattributed
+        if (field === 'medicineName') {
+          return { ...m, medicineName: val, medicineId: null };
+        }
+        return { ...m, [field]: val };
+      })
+    );
+  };
+
+  // Fill catalog metadata ONLY — never auto-prescribe dosage, frequency, duration, or instructions!
+  const applyCatalogSelection = (idx: number, item: CatalogMedicine) => {
+    setMedicines((prev) =>
+      prev.map((m, i) =>
+        i === idx
+          ? {
+              ...m,
+              medicineId: item.id,
+              medicineName: item.brandName,
+              genericName: item.genericName || '',
+              strength: item.strength || '',
+              dosageType: item.dosageType || '',
+              manufacturer: item.manufacturer || '',
+              packageMark: item.packageMark || '',
+            }
+          : m
+      )
+    );
+    setActiveMedIdx(null);
+    setHighlightedSugIdx(-1);
+  };
+
+  const handleMedKeyDown = (idx: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (activeMedIdx !== idx) return;
+
+    if (e.key === 'ArrowDown') {
+      if (medResults.length > 0) {
+        e.preventDefault();
+        setHighlightedSugIdx((prev) => (prev + 1) % medResults.length);
+      }
+    } else if (e.key === 'ArrowUp') {
+      if (medResults.length > 0) {
+        e.preventDefault();
+        setHighlightedSugIdx((prev) => (prev <= 0 ? medResults.length - 1 : prev - 1));
+      }
+    } else if (e.key === 'Enter' && highlightedSugIdx >= 0 && medResults[highlightedSugIdx]) {
+      e.preventDefault();
+      applyCatalogSelection(idx, medResults[highlightedSugIdx]);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setActiveMedIdx(null);
+      setHighlightedSugIdx(-1);
+    }
+  };
+
+  const addMedicineRow = () => {
+    setMedicines((prev) => [...prev, emptyMedicine()]);
+  };
+
+  const removeMedicineRow = (idx: number) => {
+    setMedicines((prev) => (prev.length === 1 ? [emptyMedicine()] : prev.filter((_, i) => i !== idx)));
+  };
+
+  const activeDoctorObj = isSuper ? doctors.find((d) => d.id === doctorId) || user : user;
+
+  const careStateMap = {
+    oralHygieneInstructions: { val: oralHygieneInstructions, setter: setOralHygieneInstructions },
+    toothBrushingInstructions: { val: toothBrushingInstructions, setter: setToothBrushingInstructions },
+    mouthwashRecommendations: { val: mouthwashRecommendations, setter: setMouthwashRecommendations },
+    postExtractionInstructions: { val: postExtractionInstructions, setter: setPostExtractionInstructions },
+    postTreatmentPrecautions: { val: postTreatmentPrecautions, setter: setPostTreatmentPrecautions },
+    dietaryRecommendations: { val: dietaryRecommendations, setter: setDietaryRecommendations },
+    additionalClinicalAdvice: { val: additionalClinicalAdvice, setter: setAdditionalClinicalAdvice },
+  };
+
+  const addCustomHeadingRow = (headingLabel: string) => {
+    const clean = headingLabel.trim();
+    if (!clean) return;
+    setCustomSections((prev) => {
+      const exists = prev.some((s) => s.heading.trim().toLowerCase() === clean.toLowerCase());
+      if (exists) return prev;
+      return [...prev, { heading: clean, content: '' }];
+    });
+    setNewHeadingInput('');
+    setHeadingsNotice(null);
+  };
+
+  const moveCustomSection = (idx: number, direction: -1 | 1) => {
+    setCustomSections((prev) => {
+      const target = idx + direction;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      const temp = next[idx];
+      next[idx] = next[target];
+      next[target] = temp;
+      return next;
+    });
+  };
+
+  const handleSaveDoctorDefaultHeadings = async () => {
+    const validHeadings = customSections
+      .map((s) => s.heading.trim())
+      .filter(Boolean)
+      .map((heading) => ({ heading }));
+
+    setSavingHeadings(true);
+    setHeadingsNotice(null);
+    setError(null);
+    try {
+      const targetDocId = isSuper && doctorId ? doctorId : user?.id;
+      const res = await api.saveDoctorClinicalHeadings(validHeadings, targetDocId);
+      setSavedDoctorHeadings(res.headings);
+      setHeadingsNotice(
+        res.headings.length > 0
+          ? `Saved ${res.headings.length} default heading(s) for future prescriptions.`
+          : 'Cleared saved default headings.'
+      );
+    } catch (err: any) {
+      setError(err.message || 'Failed to save default clinical headings');
+    } finally {
+      setSavingHeadings(false);
+    }
+  };
+
+  const handleSave = async (mode: 'draft' | 'preview' | 'finalize') => {
+    setError(null);
+
+    if (!selectedPatientId || !visitId) {
+      setError('Please select a Patient and an Associated Clinic Visit.');
+      return;
+    }
+
+    const nonEmptyMeds = medicines.filter(
+      (m) =>
+        m.medicineName?.trim() ||
+        m.genericName?.trim() ||
+        m.strength?.trim() ||
+        m.dosage?.trim() ||
+        m.frequency?.trim() ||
+        m.duration?.trim() ||
+        m.additionalNotes?.trim()
+    );
+
+    for (const m of nonEmptyMeds) {
+      if (!m.medicineName || !m.medicineName.trim()) {
+        setError('Each entered medicine row must include a Medicine Name.');
+        return;
+      }
+    }
+
+    const nonEmptyPlans = treatmentPlanItems.filter(
+      (p) =>
+        p.treatmentName?.trim() ||
+        p.toothNumber?.trim() ||
+        (p.cost !== undefined && p.cost !== null && String(p.cost).trim() !== '') ||
+        p.notes?.trim()
+    );
+    for (const p of nonEmptyPlans) {
+      if (!p.treatmentName || !p.treatmentName.trim()) {
+        setError('Each entered treatment plan row must include a Treatment Name.');
+        return;
+      }
+      if (p.cost !== undefined && p.cost !== null && String(p.cost).trim() !== '') {
+        const c = Number(String(p.cost).trim());
+        if (!Number.isFinite(c) || c < 0) {
+          setError(`Invalid cost for treatment "${p.treatmentName}".`);
+          return;
+        }
+      }
+    }
+
+    const nonEmptyTests = advisedTests.filter(
+      (t) =>
+        t.testName?.trim() ||
+        (t.cost !== undefined && t.cost !== null && String(t.cost).trim() !== '') ||
+        t.notes?.trim()
+    );
+    for (const t of nonEmptyTests) {
+      if (!t.testName || !t.testName.trim()) {
+        setError('Each entered advised test row must include a Test Name.');
+        return;
+      }
+      if (t.cost !== undefined && t.cost !== null && String(t.cost).trim() !== '') {
+        const c = Number(String(t.cost).trim());
+        if (!Number.isFinite(c) || c < 0) {
+          setError(`Invalid cost for advised test "${t.testName}".`);
+          return;
+        }
+      }
+    }
+
+    const nonEmptyCustomSections = customSections
+      .filter((s) => s.content?.trim().length > 0)
+      .map((s) => ({
+        heading: s.heading.trim(),
+        content: s.content.trim(),
+      }));
+
+    for (const sec of nonEmptyCustomSections) {
+      if (!sec.heading) {
+        setError('Each filled personalized clinical section must include a Heading title.');
+        return;
+      }
+    }
+
+    if (mode === 'finalize') {
+      const hasClinical =
+        Boolean(diagnosis.trim()) ||
+        Boolean(chiefComplaints.trim()) ||
+        Boolean(clinicalFindings.trim()) ||
+        Boolean(treatmentPlan.trim()) ||
+        nonEmptyCustomSections.length > 0 ||
+        nonEmptyMeds.length > 0 ||
+        nonEmptyPlans.length > 0 ||
+        nonEmptyTests.length > 0;
+      if (!hasClinical) {
+        setError(
+          'Cannot finalize an empty prescription. Add clinical details, personalized headings, planned treatments, advised tests, or at least one medicine.'
+        );
+        return;
+      }
+    }
+
+    const payload = {
+      patientId: selectedPatientId,
+      visitId: Number(visitId),
+      doctorId: isSuper ? doctorId : user?.id,
+      prescriptionDate,
+      status: mode === 'finalize' ? 'Finalized' : 'Draft',
+      finalizeNow: mode === 'finalize',
+      chiefComplaints,
+      clinicalFindings,
+      diagnosis,
+      treatmentPlan,
+      customSections: nonEmptyCustomSections,
+      showPlanCosts,
+      treatmentPlanItems: nonEmptyPlans,
+      advisedTests: nonEmptyTests,
+      followUpDate,
+      oralHygieneInstructions,
+      toothBrushingInstructions,
+      mouthwashRecommendations,
+      postExtractionInstructions,
+      postTreatmentPrecautions,
+      dietaryRecommendations,
+      additionalClinicalAdvice,
+      medicines: nonEmptyMeds,
+      idempotencyKey: !editingPrescription ? idempotencyKeyRef.current : undefined,
+    };
+
+    setSaving(true);
+    try {
+      let saved: Prescription;
+      if (editingPrescription) {
+        saved = await api.updatePrescription(editingPrescription.id, payload);
+      } else {
+        saved = await api.createPrescription(payload);
+      }
+      onSaved(saved, mode === 'preview');
+    } catch (err: any) {
+      setError(err.message || 'Failed to save prescription');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto font-prescription">
+      <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[94vh] flex flex-col shadow-2xl border border-slate-200 overflow-hidden">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-teal-800 to-slate-900 px-5 sm:px-6 py-4 text-white flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-white/15 border border-white/25 flex items-center justify-center font-serif font-bold text-lg">
+              &#8478;
+            </div>
+            <div>
+              <h2 className="text-base sm:text-lg font-extrabold tracking-tight">
+                {editingPrescription
+                  ? `Edit Prescription ${editingPrescription.prescriptionNumber}`
+                  : 'Create Dental Prescription'}
+              </h2>
+              <p className="text-xs text-teal-100/90">
+                {editingPrescription
+                  ? `Status: ${editingPrescription.status} · Revision v${editingPrescription.revisionNumber}`
+                  : 'Auto-linked to patient, doctor & visit · Integrated with local Bangladesh medicine catalog'}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-white/80 hover:text-white hover:bg-white/10 cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Scrollable Body */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 text-xs">
+          {error && (
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 font-semibold flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {/* Patient Picker if opened without preselected patient */}
+          {!selectedPatientId && (
+            <div className="p-4 rounded-xl border-2 border-dashed border-teal-300 bg-teal-50/40 space-y-3">
+              <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <Search className="w-4 h-4 text-teal-600" />
+                <span>Step 1: Select Patient from Central Clinic Database</span>
+              </div>
+              <input
+                type="text"
+                value={patientSearchQuery}
+                onChange={(e) => setPatientSearchQuery(e.target.value)}
+                placeholder="Search by Patient Name, ID (DP-1001), or Mobile Number..."
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-xs focus:ring-2 focus:ring-teal-500"
+              />
+              {searchingPatients ? (
+                <div className="text-slate-500 py-2">Searching patients...</div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-52 overflow-y-auto">
+                  {patientSearchResults.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setSelectedPatientId(p.id)}
+                      className="text-left p-3 rounded-xl border border-slate-200 bg-white hover:border-teal-400 hover:bg-teal-50/50 transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-slate-900">{p.name}</span>
+                        <span className="font-mono font-bold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                          {p.patientId}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">
+                        {p.phone} &bull; {p.gender}, {p.age ? `${p.age} yrs` : 'N/A'} &bull;{' '}
+                        {p.visitCount || 0} visit(s)
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {selectedPatientId && (
+            <>
+              {/* Auto-Retrieved Patient & Doctor Info Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                    <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                      <UserIcon className="w-4 h-4 text-teal-600" />
+                      <span>Patient Information (Auto-Retrieved)</span>
+                    </span>
+                    {!editingPrescription && !patientId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedPatientId(null);
+                          setVisitId('');
+                        }}
+                        className="text-[11px] font-semibold text-teal-700 hover:underline cursor-pointer"
+                      >
+                        Change Patient
+                      </button>
+                    )}
+                  </div>
+
+                  {loadingProfile ? (
+                    <div className="py-3 text-slate-400">Loading patient record...</div>
+                  ) : patientProfile ? (
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                      <div>
+                        <span className="text-slate-500 block">Name:</span>
+                        <strong className="text-slate-900">{patientProfile.name}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block">Patient ID:</span>
+                        <strong className="text-teal-700 font-mono">{patientProfile.patientId}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block">Age &amp; Gender:</span>
+                        <strong className="text-slate-800">
+                          {patientProfile.age ? `${patientProfile.age} yrs` : 'N/A'} /{' '}
+                          {patientProfile.gender}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block">Phone Number:</span>
+                        <strong className="text-slate-800">{patientProfile.phone}</strong>
+                      </div>
+                      {patientProfile.address && (
+                        <div className="col-span-2">
+                          <span className="text-slate-500 block">Address:</span>
+                          <span className="text-slate-700">{patientProfile.address}</span>
+                        </div>
+                      )}
+                      {patientProfile.allergies &&
+                        !['none', 'n/a', 'nil', '-'].includes(
+                          patientProfile.allergies.trim().toLowerCase()
+                        ) && (
+                          <div className="col-span-2 mt-1 p-2 rounded-lg bg-red-50 border border-red-200 text-red-900 font-semibold flex items-center gap-1.5">
+                            <AlertTriangle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                            <span>Allergy Alert: {patientProfile.allergies}</span>
+                          </div>
+                        )}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="p-4 rounded-xl bg-teal-50/50 border border-teal-200 space-y-2">
+                  <div className="flex items-center justify-between border-b border-teal-200 pb-2">
+                    <span className="font-bold text-slate-900 flex items-center gap-1.5">
+                      <Stethoscope className="w-4 h-4 text-teal-600" />
+                      <span>Prescribing Doctor (Auto-Retrieved)</span>
+                    </span>
+                    <span className="text-[11px] font-semibold text-teal-800">
+                      {clinicSettings.clinic_name || 'Dental Care'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                    <div className="col-span-2">
+                      <span className="text-slate-500 block">Doctor Name:</span>
+                      {isSuper && !editingPrescription && doctors.length > 0 ? (
+                        <select
+                          value={doctorId}
+                          onChange={(e) => setDoctorId(parseInt(e.target.value, 10))}
+                          className="w-full mt-0.5 px-2.5 py-1.5 rounded-lg border border-teal-300 bg-white font-bold text-slate-900"
+                        >
+                          {doctors.map((d) => (
+                            <option key={d.id} value={d.id}>
+                              {d.fullName} ({d.specialization || d.role})
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <strong className="text-slate-900">{activeDoctorObj?.fullName}</strong>
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Designation:</span>
+                      <span className="font-semibold text-teal-800">
+                        {activeDoctorObj?.specialization || 'Dental Surgeon'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Registration Info:</span>
+                      <span className="font-mono font-semibold text-slate-700">
+                        {activeDoctorObj?.registrationNumber || 'Clinic Verified'}
+                      </span>
+                    </div>
+                    {activeDoctorObj?.qualifications && (
+                      <div className="col-span-2">
+                        <span className="text-slate-500 block">Qualification:</span>
+                        <span className="text-slate-700">{activeDoctorObj.qualifications}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Clinical Details (English Section Labels) */}
+              <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                  <span className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                    <CalendarCheck className="w-4 h-4 text-teal-600" />
+                    <span>Prescription &amp; Clinical Details</span>
+                  </span>
+                  {visitId && patientProfile && (
+                    <button
+                      type="button"
+                      onClick={syncFromSelectedVisit}
+                      className="text-[11px] font-semibold text-teal-700 hover:bg-teal-50 px-2.5 py-1 rounded-lg border border-teal-200 flex items-center gap-1 cursor-pointer"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      <span>Load Visit Complaints &amp; Diagnosis</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Unique Prescription Number
+                    </label>
+                    <input
+                      type="text"
+                      disabled
+                      value={
+                        editingPrescription
+                          ? editingPrescription.prescriptionNumber
+                          : 'Auto-assigned on save (RX-#)'
+                      }
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-slate-50 font-mono font-bold text-teal-800"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Prescription Date *
+                    </label>
+                    <input
+                      type="date"
+                      required
+                      value={prescriptionDate}
+                      onChange={(e) => setPrescriptionDate(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Associated Clinic Visit *
+                    </label>
+                    <select
+                      required
+                      value={visitId}
+                      onChange={(e) => handleVisitChange(parseInt(e.target.value, 10))}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white font-medium text-slate-900 focus:ring-2 focus:ring-teal-500"
+                    >
+                      <option value="" disabled>
+                        Select patient visit...
+                      </option>
+                      {patientProfile?.visits.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.visitId} &bull; {v.visitDate} &bull; {v.doctorName}
+                        </option>
+                      ))}
+                    </select>
+                    {patientProfile && patientProfile.visits.length === 0 && (
+                      <p className="text-[11px] text-amber-700 mt-1">
+                        This patient has no visits yet. Create a clinic visit first.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Chief Complaints
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={chiefComplaints}
+                      onChange={(e) => setChiefComplaints(e.target.value)}
+                      placeholder="Patient presenting dental symptoms & pain history..."
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Clinical Findings
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={clinicalFindings}
+                      onChange={(e) => setClinicalFindings(e.target.value)}
+                      placeholder="Intraoral examination, percussion, radiographic findings..."
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Diagnosis</label>
+                    <input
+                      type="text"
+                      value={diagnosis}
+                      onChange={(e) => setDiagnosis(e.target.value)}
+                      placeholder="e.g., Acute Irreversible Pulpitis #36 / Post-Extraction Socket"
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500 font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      পরবর্তী সাক্ষাতের তারিখ:
+                    </label>
+                    <input
+                      type="date"
+                      value={followUpDate}
+                      onChange={(e) => setFollowUpDate(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500"
+                    />
+                    {followUpDate && (
+                      <div className="text-[11px] font-semibold text-teal-800 mt-1">
+                        বাংলা তারিখ: {formatBanglaDate(followUpDate)}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <label className="block font-semibold text-slate-700 mb-1">
+                      Treatment Plan
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={treatmentPlan}
+                      onChange={(e) => setTreatmentPlan(e.target.value)}
+                      placeholder="Planned procedures, crown preparation, scaling, or follow-up stages..."
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500"
+                    />
+                  </div>
+                </div>
+
+                {/* PERSONALIZED CLINICAL HEADINGS (Per-Doctor Defaults + Custom Sections) */}
+                <div className="mt-3 pt-3 border-t border-slate-200 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="font-bold text-slate-800 flex items-center gap-1.5 flex-wrap">
+                        <span>Personalized Clinical Headings</span>
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200">
+                          Optional &bull; Custom per Doctor
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        Add custom clinical headings (e.g., Investigations, History, On Examinations) alongside standard fields, and optionally save them as your default headings.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {savedDoctorHeadings.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCustomSections((prev) => {
+                              const existingSet = new Set(
+                                prev.map((s) => s.heading.trim().toLowerCase())
+                              );
+                              const additions = savedDoctorHeadings
+                                .filter((h) => !existingSet.has(h.heading.trim().toLowerCase()))
+                                .map((h) => ({ heading: h.heading, content: '' }));
+                              return [...prev, ...additions];
+                            });
+                            setHeadingsNotice(null);
+                          }}
+                          className="px-2.5 py-1 text-[11px] font-semibold rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 cursor-pointer"
+                        >
+                          Load My Defaults ({savedDoctorHeadings.length})
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={savingHeadings}
+                        onClick={handleSaveDoctorDefaultHeadings}
+                        className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 flex items-center gap-1 cursor-pointer disabled:opacity-60"
+                        title="Remember this set of headings for your future prescriptions"
+                      >
+                        <BookmarkCheck className="w-3.5 h-3.5" />
+                        <span>{savingHeadings ? 'Saving...' : 'Save as My Defaults'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {headingsNotice && (
+                    <div className="px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-semibold flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span>{headingsNotice}</span>
+                    </div>
+                  )}
+
+                  {/* Quick Presets + Custom Heading Input */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {PERSONALIZED_HEADING_PRESETS.map((preset) => {
+                      const alreadyAdded = customSections.some(
+                        (s) => s.heading.trim().toLowerCase() === preset.toLowerCase()
+                      );
+                      return (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => addCustomHeadingRow(preset)}
+                          className={`px-2 py-0.5 text-[11px] rounded border transition-colors cursor-pointer ${
+                            alreadyAdded
+                              ? 'bg-teal-50 text-teal-800 border-teal-300 font-semibold'
+                              : 'bg-slate-100 hover:bg-teal-50 hover:text-teal-800 border-slate-200 hover:border-teal-300 text-slate-700'
+                          }`}
+                        >
+                          {alreadyAdded ? '✓ ' : '+ '}
+                          {preset}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="text"
+                      value={newHeadingInput}
+                      onChange={(e) => setNewHeadingInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          addCustomHeadingRow(newHeadingInput);
+                        }
+                      }}
+                      placeholder="Type a custom heading (e.g., Investigations, History, On Examinations, O/E, Advice)..."
+                      className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-teal-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => addCustomHeadingRow(newHeadingInput)}
+                      disabled={!newHeadingInput.trim()}
+                      className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 disabled:opacity-40 text-white font-bold flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Heading</span>
+                    </button>
+                  </div>
+
+                  {customSections.length > 0 && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                      {customSections.map((sec, idx) => (
+                        <div
+                          key={idx}
+                          className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5"
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="text"
+                              value={sec.heading}
+                              onChange={(e) =>
+                                setCustomSections((prev) =>
+                                  prev.map((row, i) =>
+                                    i === idx ? { ...row, heading: e.target.value } : row
+                                  )
+                                )
+                              }
+                              placeholder="Heading Title..."
+                              className="flex-1 px-2 py-1 rounded-md border border-slate-300 bg-white font-bold text-teal-800 text-xs focus:ring-2 focus:ring-teal-500"
+                            />
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => moveCustomSection(idx, -1)}
+                              className="p-1 rounded text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
+                              title="Move Up"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === customSections.length - 1}
+                              onClick={() => moveCustomSection(idx, 1)}
+                              className="p-1 rounded text-slate-400 hover:text-slate-700 disabled:opacity-30 cursor-pointer"
+                              title="Move Down"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setCustomSections((prev) => prev.filter((_, i) => i !== idx))
+                              }
+                              className="p-1 rounded text-slate-400 hover:text-rose-600 cursor-pointer"
+                              title="Remove Heading"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <textarea
+                            rows={2}
+                            value={sec.content}
+                            onChange={(e) =>
+                              setCustomSections((prev) =>
+                                prev.map((row, i) =>
+                                  i === idx ? { ...row, content: e.target.value } : row
+                                )
+                              )
+                            }
+                            placeholder={`Enter ${sec.heading || 'clinical'} details (optional — empty headings won't print)...`}
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-teal-500"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* DYNAMIC MEDICINES WITH SMART LOCAL CATALOG AUTOCOMPLETE (NO QUANTITY FIELD!) */}
+              <div className="p-4 rounded-xl border border-teal-200 bg-teal-50/30 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                      <Pill className="w-4 h-4 text-teal-600" />
+                      <span>Prescribed Medications ({medicines.length})</span>
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      Search the local Bangladesh medicine database by brand, generic, strength, dosage form, or manufacturer — or enter custom entries. Enter Dosage, Frequency, Duration &amp; Instructions freely in English or বাংলা.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addMedicineRow}
+                    className="px-3 py-1.5 text-xs font-bold rounded-lg bg-teal-600 hover:bg-teal-700 text-white flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Medicine</span>
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  {medicines.map((med, idx) => (
+                    <div
+                      key={idx}
+                      className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs space-y-3 relative"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-teal-800">Medicine #{idx + 1}</span>
+                          {med.medicineId ? (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200">
+                              Catalog Matched{med.manufacturer ? ` · ${med.manufacturer}` : ''}
+                            </span>
+                          ) : med.medicineName.trim() ? (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                              Custom Entry
+                            </span>
+                          ) : null}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeMedicineRow(idx)}
+                          className="text-slate-400 hover:text-rose-600 flex items-center gap-1 text-[11px] font-semibold cursor-pointer"
+                          title="Remove Medicine Row"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Remove</span>
+                        </button>
+                      </div>
+
+                      {/* Row 1: Catalog Identification Fields */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                        {/* Smart Catalog Autocomplete Input */}
+                        <div className="relative sm:col-span-2 lg:col-span-1">
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Medicine / Brand Name *
+                          </label>
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={med.medicineName}
+                              onFocus={() => triggerCatalogSearch(idx, med.medicineName)}
+                              onChange={(e) => {
+                                updateMedicineField(idx, 'medicineName', e.target.value);
+                                triggerCatalogSearch(idx, e.target.value);
+                              }}
+                              onKeyDown={(e) => handleMedKeyDown(idx, e)}
+                              onBlur={() => setTimeout(() => setActiveMedIdx(null), 200)}
+                              placeholder="Type brand, generic, e.g. napa..."
+                              className="w-full px-2.5 py-1.5 pr-7 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500 font-semibold"
+                              autoComplete="off"
+                            />
+                            {activeMedIdx === idx && searchingMeds && (
+                              <Loader2 className="w-3.5 h-3.5 text-teal-600 animate-spin absolute right-2 top-2" />
+                            )}
+                          </div>
+
+                          {activeMedIdx === idx && (
+                            <div
+                              className="absolute left-0 w-full sm:w-[440px] max-w-[90vw] mt-1 bg-white border border-slate-300 rounded-xl shadow-2xl z-50 overflow-hidden"
+                              onMouseDown={(e) => e.preventDefault()}
+                            >
+                              <div className="px-3 py-1.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                                <span>Bangladesh Medicine Database</span>
+                                <span className="font-mono text-teal-700 tabular-nums">
+                                  {searchingMeds
+                                    ? 'Searching...'
+                                    : `${medTotalCount.toLocaleString()} match${medTotalCount === 1 ? '' : 'es'}`}
+                                </span>
+                              </div>
+
+                              <div className="max-h-64 overflow-y-auto divide-y divide-slate-100">
+                                {searchingMeds && medResults.length === 0 ? (
+                                  <div className="px-3 py-4 text-center text-slate-500 text-xs">
+                                    Searching local medicine catalog...
+                                  </div>
+                                ) : medResults.length === 0 ? (
+                                  <div className="px-3 py-4 text-center text-slate-500 text-xs">
+                                    No matching active catalog medicine found for &ldquo;{med.medicineName}&rdquo;. You can continue typing to use a custom medicine name.
+                                  </div>
+                                ) : (
+                                  medResults.map((item, sIdx) => {
+                                    const isHighlighted = sIdx === highlightedSugIdx;
+                                    return (
+                                      <button
+                                        key={item.id}
+                                        type="button"
+                                        onMouseEnter={() => setHighlightedSugIdx(sIdx)}
+                                        onMouseDown={(e) => {
+                                          e.preventDefault();
+                                          applyCatalogSelection(idx, item);
+                                        }}
+                                        className={`w-full text-left px-3 py-2 transition-colors cursor-pointer ${
+                                          isHighlighted ? 'bg-teal-50' : 'hover:bg-slate-50'
+                                        }`}
+                                      >
+                                        <div className="font-bold text-slate-900 text-xs flex items-center justify-between gap-2">
+                                          <span>
+                                            {item.brandName}
+                                            {item.strength ? (
+                                              <span className="text-teal-700"> — {item.strength}</span>
+                                            ) : null}
+                                          </span>
+                                        </div>
+                                        <div className="text-[11px] font-medium text-slate-700">
+                                          {item.genericName}
+                                        </div>
+                                        <div className="text-[10px] text-slate-500">
+                                          {item.dosageType} | {item.manufacturer}
+                                        </div>
+                                      </button>
+                                    );
+                                  })
+                                )}
+                              </div>
+
+                              {medHasMore && !searchingMeds && (
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    handleLoadMoreCatalog();
+                                  }}
+                                  className="w-full px-3 py-2 bg-slate-50 hover:bg-teal-50 border-t border-slate-200 text-teal-700 font-bold text-[11px] flex items-center justify-center gap-1 cursor-pointer"
+                                >
+                                  {loadingMoreMeds ? (
+                                    <>
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                      <span>Loading more...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <ChevronDown className="w-3.5 h-3.5" />
+                                      <span>
+                                        Load 10 more ({medResults.length} of {medTotalCount.toLocaleString()})
+                                      </span>
+                                    </>
+                                  )}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Generic Name
+                          </label>
+                          <input
+                            type="text"
+                            value={med.genericName || ''}
+                            onChange={(e) => updateMedicineField(idx, 'genericName', e.target.value)}
+                            placeholder="Generic name..."
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Strength
+                          </label>
+                          <input
+                            type="text"
+                            value={med.strength || ''}
+                            onChange={(e) => updateMedicineField(idx, 'strength', e.target.value)}
+                            placeholder="e.g., 500 mg"
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Dosage Form
+                          </label>
+                          <input
+                            type="text"
+                            value={med.dosageType || ''}
+                            onChange={(e) => updateMedicineField(idx, 'dosageType', e.target.value)}
+                            placeholder="e.g., Tablet, Capsule, Syrup"
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Row 2: Doctor's Clinical Regimen Fields (English & Bangla Supported, NO Quantity) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Dosage
+                          </label>
+                          <input
+                            type="text"
+                            value={med.dosage || ''}
+                            onChange={(e) => updateMedicineField(idx, 'dosage', e.target.value)}
+                            placeholder="e.g., 1 tablet / ১টি ট্যাবলেট"
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Frequency (Free Text)
+                          </label>
+                          <input
+                            type="text"
+                            value={med.frequency || ''}
+                            onChange={(e) => updateMedicineField(idx, 'frequency', e.target.value)}
+                            placeholder="e.g., 1+0+1 / দিনে ৩ বার"
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 font-semibold text-teal-800"
+                          />
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {FREQUENCY_HELPERS.slice(0, 5).map((fp) => (
+                              <button
+                                key={fp}
+                                type="button"
+                                onClick={() => updateMedicineField(idx, 'frequency', fp)}
+                                className="px-1.5 py-0.5 text-[10px] rounded bg-slate-100 hover:bg-teal-100 text-slate-700 cursor-pointer"
+                              >
+                                {fp}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Duration
+                          </label>
+                          <input
+                            type="text"
+                            value={med.duration || ''}
+                            onChange={(e) => updateMedicineField(idx, 'duration', e.target.value)}
+                            placeholder="e.g., 5 days / ৫ দিন"
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Meal / Timing Instructions
+                          </label>
+                          <input
+                            type="text"
+                            list={`meal-options-${idx}`}
+                            value={med.mealInstructions || ''}
+                            onChange={(e) =>
+                              updateMedicineField(idx, 'mealInstructions', e.target.value)
+                            }
+                            placeholder="After meals / খাবারের পরে..."
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300"
+                          />
+                          <datalist id={`meal-options-${idx}`}>
+                            {MEAL_OPTIONS.map((opt) => (
+                              <option key={opt} value={opt} />
+                            ))}
+                          </datalist>
+                        </div>
+                      </div>
+
+                      {/* Row 3: Additional Medicine Notes */}
+                      <div>
+                        <label className="block font-semibold text-slate-700 mb-1">
+                          Additional Instructions / Notes
+                        </label>
+                        <input
+                          type="text"
+                          value={med.additionalNotes || ''}
+                          onChange={(e) =>
+                            updateMedicineField(idx, 'additionalNotes', e.target.value)
+                          }
+                          placeholder="e.g., Take only if pain persists / ব্যথা হলে খাবেন..."
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* OPTIONAL: TREATMENT PLAN ITEMS & ADVISED TESTS (WITH OPTIONAL COST) */}
+              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-sm flex items-center gap-1.5 flex-wrap">
+                      <ClipboardList className="w-4 h-4 text-teal-600" />
+                      <span>Treatment Plan &amp; Advised Tests</span>
+                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-200/80 text-slate-700">
+                        Optional
+                      </span>
+                      {(treatmentPlanItems.length > 0 || advisedTests.length > 0) && (
+                        <span className="text-[11px] font-semibold text-teal-800">
+                          ({treatmentPlanItems.length} treatment{treatmentPlanItems.length === 1 ? '' : 's'}, {advisedTests.length} test{advisedTests.length === 1 ? '' : 's'})
+                        </span>
+                      )}
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      Optionally recommend procedures or diagnostic tests (with or without estimated costs in ৳). Leave empty to exclude from the prescription.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowOptionalSections(true);
+                        setTreatmentPlanItems((prev) => [...prev, emptyTreatmentPlanItem()]);
+                      }}
+                      className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-white hover:bg-teal-50 text-teal-800 border border-teal-300 flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Planned Treatment</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowOptionalSections(true);
+                        setAdvisedTests((prev) => [...prev, emptyAdvisedTestItem()]);
+                      }}
+                      className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-white hover:bg-cyan-50 text-cyan-800 border border-cyan-300 flex items-center gap-1 cursor-pointer"
+                    >
+                      <Radio className="w-3.5 h-3.5" />
+                      <span>Add Advised Test</span>
+                    </button>
+
+                    {(showOptionalSections ||
+                      treatmentPlanItems.length > 0 ||
+                      advisedTests.length > 0) && (
+                      <button
+                        type="button"
+                        onClick={() => setShowOptionalSections((v) => !v)}
+                        className="px-2 py-1.5 text-[11px] font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                      >
+                        {showOptionalSections ? 'Collapse' : 'Expand'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {showOptionalSections && (
+                  <div className="space-y-4 pt-2 border-t border-slate-200">
+                    {/* Sub-panel A: Optional Planned Treatments */}
+                    <div className="p-3.5 rounded-xl bg-white border border-teal-200 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-teal-900 flex items-center gap-1.5">
+                          <ClipboardList className="w-3.5 h-3.5 text-teal-600" />
+                          <span>Planned Treatments (Optional)</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setTreatmentPlanItems((prev) => [...prev, emptyTreatmentPlanItem()])
+                          }
+                          className="text-[11px] font-bold text-teal-700 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" /> Add Row
+                        </button>
+                      </div>
+
+                      {/* Quick Presets */}
+                      <div className="flex flex-wrap gap-1.5">
+                        {QUICK_TREATMENT_PLAN_PRESETS.map((pt) => (
+                          <button
+                            key={pt.treatmentName}
+                            type="button"
+                            onClick={() =>
+                              setTreatmentPlanItems((prev) => [
+                                ...prev,
+                                {
+                                  treatmentName: pt.treatmentName,
+                                  toothNumber: '',
+                                  cost: pt.cost,
+                                  notes: '',
+                                },
+                              ])
+                            }
+                            className="px-2 py-0.5 text-[11px] rounded bg-slate-100 hover:bg-teal-50 hover:text-teal-800 border border-slate-200 hover:border-teal-300 text-slate-700 cursor-pointer"
+                          >
+                            + {pt.treatmentName} (৳{Number(pt.cost).toLocaleString()})
+                          </button>
+                        ))}
+                      </div>
+
+                      {treatmentPlanItems.length === 0 ? (
+                        <div className="text-[11px] text-slate-400 italic py-1">
+                          No planned treatments added. Click a preset or &ldquo;Add Row&rdquo; above if needed.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {treatmentPlanItems.map((item, idx) => (
+                            <div
+                              key={idx}
+                              className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
+                            >
+                              <div className="sm:col-span-5">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Treatment / Procedure *
+                                </label>
+                                <input
+                                  type="text"
+                                  value={item.treatmentName}
+                                  onChange={(e) =>
+                                    setTreatmentPlanItems((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, treatmentName: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="e.g., Root Canal Treatment"
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-2">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Tooth # (Opt.)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={item.toothNumber || ''}
+                                  onChange={(e) =>
+                                    setTreatmentPlanItems((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, toothNumber: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="e.g., 36"
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-2">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Cost ৳ (Opt.)
+                                </label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="any"
+                                  value={item.cost ?? ''}
+                                  onChange={(e) =>
+                                    setTreatmentPlanItems((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, cost: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="Optional"
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-semibold"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-2">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Notes (Opt.)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={item.notes || ''}
+                                  onChange={(e) =>
+                                    setTreatmentPlanItems((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, notes: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="Stage / note..."
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-1 flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setTreatmentPlanItems((prev) =>
+                                      prev.filter((_, i) => i !== idx)
+                                    )
+                                  }
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                                  title="Remove Treatment Item"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Sub-panel B: Optional Advised Diagnostic Tests */}
+                    <div className="p-3.5 rounded-xl bg-white border border-cyan-200 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-cyan-900 flex items-center gap-1.5">
+                          <Radio className="w-3.5 h-3.5 text-cyan-600" />
+                          <span>Advised Diagnostic Tests / X-rays (Optional)</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAdvisedTests((prev) => [...prev, emptyAdvisedTestItem()])
+                          }
+                          className="text-[11px] font-bold text-cyan-700 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" /> Add Row
+                        </button>
+                      </div>
+
+                      {/* Quick Test Presets */}
+                      <div className="flex flex-wrap gap-1.5">
+                        {QUICK_ADVISED_TEST_PRESETS.map((tp) => (
+                          <button
+                            key={tp.testName}
+                            type="button"
+                            onClick={() =>
+                              setAdvisedTests((prev) => [
+                                ...prev,
+                                {
+                                  testName: tp.testName,
+                                  category: tp.category,
+                                  cost: tp.cost,
+                                  notes: '',
+                                },
+                              ])
+                            }
+                            className="px-2 py-0.5 text-[11px] rounded bg-slate-100 hover:bg-cyan-50 hover:text-cyan-800 border border-slate-200 hover:border-cyan-300 text-slate-700 cursor-pointer"
+                          >
+                            + {tp.testName} (৳{Number(tp.cost).toLocaleString()})
+                          </button>
+                        ))}
+                      </div>
+
+                      {advisedTests.length === 0 ? (
+                        <div className="text-[11px] text-slate-400 italic py-1">
+                          No diagnostic tests advised. Click a preset or &ldquo;Add Row&rdquo; above if needed.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {advisedTests.map((test, idx) => (
+                            <div
+                              key={idx}
+                              className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
+                            >
+                              <div className="sm:col-span-5">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Advised Test / Investigation *
+                                </label>
+                                <input
+                                  type="text"
+                                  value={test.testName}
+                                  onChange={(e) =>
+                                    setAdvisedTests((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, testName: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="e.g., Digital IOPA X-ray #46"
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-2">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Category
+                                </label>
+                                <select
+                                  value={test.category || 'Dental X-ray'}
+                                  onChange={(e) =>
+                                    setAdvisedTests((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, category: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  className="w-full px-2 py-1.5 rounded-lg border border-slate-300 bg-white"
+                                >
+                                  <option value="Dental X-ray">Dental X-ray</option>
+                                  <option value="IOPA">IOPA</option>
+                                  <option value="OPG">OPG</option>
+                                  <option value="CBCT">CBCT</option>
+                                  <option value="Lab / Blood">Lab / Blood</option>
+                                  <option value="Other">Other</option>
+                                </select>
+                              </div>
+
+                              <div className="sm:col-span-2">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Cost ৳ (Opt.)
+                                </label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="any"
+                                  value={test.cost ?? ''}
+                                  onChange={(e) =>
+                                    setAdvisedTests((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, cost: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="Optional"
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-semibold"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-2">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Indication (Opt.)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={test.notes || ''}
+                                  onChange={(e) =>
+                                    setAdvisedTests((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, notes: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="Before extraction..."
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-1 flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setAdvisedTests((prev) => prev.filter((_, i) => i !== idx))
+                                  }
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                                  title="Remove Advised Test"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Cost Display Toggle & Live Estimated Total */}
+                    {(treatmentPlanItems.length > 0 || advisedTests.length > 0) && (() => {
+                      const planSum = treatmentPlanItems.reduce((sum, p) => {
+                        const n = p.cost !== undefined && p.cost !== null && String(p.cost).trim() !== '' ? Number(p.cost) : 0;
+                        return sum + (Number.isFinite(n) && n >= 0 ? n : 0);
+                      }, 0);
+                      const testSum = advisedTests.reduce((sum, t) => {
+                        const n = t.cost !== undefined && t.cost !== null && String(t.cost).trim() !== '' ? Number(t.cost) : 0;
+                        return sum + (Number.isFinite(n) && n >= 0 ? n : 0);
+                      }, 0);
+                      return (
+                        <div className="p-3 rounded-xl bg-teal-50/80 border border-teal-200 flex flex-wrap items-center justify-between gap-3">
+                          <label className="inline-flex items-center gap-2 font-semibold text-slate-800 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={showPlanCosts}
+                              onChange={(e) => setShowPlanCosts(e.target.checked)}
+                              className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500"
+                            />
+                            <span>Show estimated costs (৳) on Prescription Preview &amp; PDF</span>
+                          </label>
+
+                          <div className="flex flex-wrap items-center gap-3 text-xs">
+                            <span className="text-slate-600">
+                              Treatments:{' '}
+                              <strong className="font-mono text-slate-900">
+                                ৳{planSum.toLocaleString()}
+                              </strong>
+                            </span>
+                            <span className="text-slate-600">
+                              Tests:{' '}
+                              <strong className="font-mono text-slate-900">
+                                ৳{testSum.toLocaleString()}
+                              </strong>
+                            </span>
+                            <span className="px-2.5 py-1 rounded-lg bg-teal-700 text-white font-bold font-mono">
+                              Est. Total: ৳{(planSum + testSum).toLocaleString()}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+
+              {/* BANGLA DENTAL CARE & POST-TREATMENT INSTRUCTIONS */}
+              <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-sm">
+                      দাঁতের যত্ন ও চিকিৎসা-পরবর্তী নির্দেশনা
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      রোগীর বোঝার সুবিধার্থে বাংলায় (অথবা ইংরেজিতে) যত্ন ও পরামর্শ লিখুন অথবা নমুনা নির্দেশনা যুক্ত করে প্রয়োজনমতো পরিবর্তন করুন।
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {BANGLA_CARE_CATEGORIES.map((cat, index) => {
+                    const stateEntry = careStateMap[cat.key];
+                    const isLastFullWidth = index === BANGLA_CARE_CATEGORIES.length - 1;
+                    return (
+                      <div
+                        key={cat.key}
+                        className={`space-y-1 ${isLastFullWidth ? 'md:col-span-2' : ''}`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="font-semibold text-slate-800">{cat.titleBn}</label>
+                          {!stateEntry.val.trim() && (
+                            <button
+                              type="button"
+                              onClick={() => stateEntry.setter(BANGLA_DENTAL_PRESETS[cat.key])}
+                              className="text-[10px] font-semibold text-teal-700 hover:underline cursor-pointer shrink-0"
+                            >
+                              + নমুনা নির্দেশনা যুক্ত করুন
+                            </button>
+                          )}
+                        </div>
+                        <textarea
+                          rows={2}
+                          value={stateEntry.val}
+                          onChange={(e) => stateEntry.setter(e.target.value)}
+                          placeholder={cat.placeholder}
+                          className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Footer Action Bar */}
+        <div className="bg-slate-50 border-t border-slate-200 px-5 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2 text-xs font-semibold rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 cursor-pointer"
+          >
+            Cancel
+          </button>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={saving || !selectedPatientId || !visitId}
+              onClick={() => handleSave('draft')}
+              className="px-4 py-2 text-xs font-bold rounded-xl border border-teal-300 bg-teal-50 hover:bg-teal-100 text-teal-900 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <Save className="w-3.5 h-3.5" />
+              <span>{saving ? 'Saving...' : 'Save as Draft'}</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={saving || !selectedPatientId || !visitId}
+              onClick={() => handleSave('preview')}
+              className="px-4 py-2 text-xs font-bold rounded-xl bg-slate-800 hover:bg-slate-900 text-white flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span>Save &amp; Preview</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={saving || !selectedPatientId || !visitId}
+              onClick={() => handleSave('finalize')}
+              className="px-4 py-2 text-xs font-bold rounded-xl bg-teal-600 hover:bg-teal-700 text-white shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Finalize Prescription</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

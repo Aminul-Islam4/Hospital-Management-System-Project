@@ -11,7 +11,7 @@ async function startServer() {
   const app = express();
   const port = parseInt(process.env.PORT || '3000', 10);
 
-  app.use(express.json({ limit: '10mb' }));
+  app.use(express.json({ limit: '25mb' }));
 
   // API routes
   app.use('/api', apiRouter);
@@ -19,7 +19,7 @@ async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);

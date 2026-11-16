@@ -11,6 +11,11 @@ import {
   appointments,
   auditLogs,
   systemSettings,
+  applicationFeatureFlags,
+  prescriptions,
+  prescriptionMedicines,
+  prescriptionRevisions,
+  prescriptionAuditLogs,
 } from '../db/schema.ts';
 import {
   authenticateToken,
@@ -19,9 +24,13 @@ import {
   logAudit,
   AuthenticatedRequest,
 } from './auth.ts';
+import { prescriptionsRouter } from './prescriptions.ts';
+import { medicinesRouter } from './medicines.ts';
 import { eq, desc, asc, and, or, sql, like, inArray, count } from 'drizzle-orm';
 
 export const apiRouter = Router();
+apiRouter.use(prescriptionsRouter);
+apiRouter.use(medicinesRouter);
 
 export interface VisitFinancialSnapshot {
   visitId: number;
@@ -255,6 +264,7 @@ apiRouter.post('/auth/login', async (req, res) => {
         phone: user.phone,
         specialization: user.specialization,
         qualifications: user.qualifications,
+        registrationNumber: user.registrationNumber,
       },
     });
   } catch (error: any) {
@@ -340,6 +350,7 @@ apiRouter.get('/doctors', authenticateToken, async (req: AuthenticatedRequest, r
         isActive: users.isActive,
         specialization: users.specialization,
         qualifications: users.qualifications,
+        registrationNumber: users.registrationNumber,
         joiningDate: users.joiningDate,
         createdAt: users.createdAt,
       })
@@ -396,6 +407,7 @@ apiRouter.post(
         phone,
         specialization,
         qualifications,
+        registrationNumber,
         role = 'doctor',
       } = req.body;
 
@@ -428,6 +440,7 @@ apiRouter.post(
           isActive: true,
           specialization: specialization?.trim() || null,
           qualifications: qualifications?.trim() || null,
+          registrationNumber: registrationNumber?.trim() || null,
           joiningDate: new Date().toISOString().split('T')[0],
         })
         .returning();
@@ -458,7 +471,7 @@ apiRouter.put(
         return res.status(403).json({ error: 'You can only edit your own profile.' });
       }
 
-      const { fullName, email, phone, specialization, qualifications, isActive } = req.body;
+      const { fullName, email, phone, specialization, qualifications, registrationNumber, isActive } = req.body;
 
       const updateData: any = {};
       if (fullName !== undefined) updateData.fullName = fullName;
@@ -466,6 +479,7 @@ apiRouter.put(
       if (phone !== undefined) updateData.phone = phone;
       if (specialization !== undefined) updateData.specialization = specialization;
       if (qualifications !== undefined) updateData.qualifications = qualifications;
+      if (registrationNumber !== undefined) updateData.registrationNumber = registrationNumber;
       if (isActive !== undefined && (req.user!.role === 'main_doctor' || req.user!.role === 'developer')) {
         updateData.isActive = isActive;
       }
@@ -668,6 +682,8 @@ apiRouter.get('/patients', authenticateToken, async (req: AuthenticatedRequest, 
           doctorId: visits.doctorId,
           doctorName: users.fullName,
           visitDate: visits.visitDate,
+          totalTreatmentCost: visits.totalTreatmentCost,
+          totalTestCost: visits.totalTestCost,
           totalCost: visits.totalCost,
           amountPaid: visits.amountPaid,
           outstandingDue: visits.outstandingDue,
@@ -675,7 +691,7 @@ apiRouter.get('/patients', authenticateToken, async (req: AuthenticatedRequest, 
         .from(visits)
         .innerJoin(users, eq(visits.doctorId, users.id))
         .where(inArray(visits.patientId, patientIds))
-        .orderBy(desc(visits.visitDate)),
+        .orderBy(desc(visits.visitDate), desc(visits.id)),
       db
         .select({
           patientId: appointments.patientId,
@@ -720,14 +736,28 @@ apiRouter.get('/patients', authenticateToken, async (req: AuthenticatedRequest, 
         : pVisits.filter((v) => v.doctorId === req.user?.id).length;
       const lastVisitDate = pVisits[0]?.visitDate || null;
 
+      // Sort ascending chronologically to compute exact running carried-forward balance
+      const pVisitsChrono = [...pVisits].sort((a, b) => {
+        if (a.visitDate !== b.visitDate) return a.visitDate.localeCompare(b.visitDate);
+        return a.id - b.id;
+      });
+
+      let totalTreatmentExpenses = 0;
+      let totalTestExpenses = 0;
       let totalCost = 0;
       let totalPaid = 0;
-      let totalDue = 0;
+      let runningDue = 0;
 
-      for (const v of pVisits) {
-        totalCost += parseFloat(v.totalCost || '0');
-        totalPaid += parseFloat(v.amountPaid || '0');
-        totalDue += parseFloat(v.outstandingDue || '0');
+      for (const v of pVisitsChrono) {
+        const tx = parseFloat(v.totalTreatmentCost || '0');
+        const tst = parseFloat(v.totalTestCost || '0');
+        const vNet = parseFloat(v.totalCost || '0');
+        const vPaid = parseFloat(v.amountPaid || '0');
+        totalTreatmentExpenses += tx;
+        totalTestExpenses += tst;
+        totalCost += vNet;
+        totalPaid += vPaid;
+        runningDue = Math.max(0, Number((runningDue + vNet - vPaid).toFixed(2)));
       }
 
       return {
@@ -739,9 +769,11 @@ apiRouter.get('/patients', authenticateToken, async (req: AuthenticatedRequest, 
         attendedDoctorNames,
         lastVisitDate,
         nextFollowUpDate: nextFollowUpByPatient.get(p.id) || null,
-        totalExpenses: totalCost,
-        totalPaid,
-        totalDue,
+        totalTreatmentExpenses: Number(totalTreatmentExpenses.toFixed(2)),
+        totalTestExpenses: Number(totalTestExpenses.toFixed(2)),
+        totalExpenses: Number(totalCost.toFixed(2)),
+        totalPaid: Number(totalPaid.toFixed(2)),
+        totalDue: runningDue,
       };
     });
 
@@ -973,23 +1005,47 @@ apiRouter.get('/patients/:id', authenticateToken, async (req: AuthenticatedReque
       }
     }
 
-    // Patient-wide financial totals
+    // Patient-wide financial totals derived directly from freshly reconciled visit snapshots
     let totalTreatmentExpenses = 0;
     let totalTestExpenses = 0;
     let totalAdditionalCharges = 0;
     let totalDiscounts = 0;
     let totalExpenses = 0;
     let totalAmountPaid = 0;
+    let latestSnapDue = 0;
 
     for (const v of visitRecords) {
-      totalTreatmentExpenses += parseFloat(v.totalTreatmentCost || '0');
-      totalTestExpenses += parseFloat(v.totalTestCost || '0');
-      totalAdditionalCharges += parseFloat(v.additionalCharges || '0');
-      totalDiscounts += parseFloat(v.discount || '0');
-      totalExpenses += parseFloat(v.totalCost || '0');
-      totalAmountPaid += parseFloat(v.amountPaid || '0');
+      const snap = visitSnapshotMap.get(v.id);
+      if (snap) {
+        totalTreatmentExpenses += snap.treatmentCost;
+        totalTestExpenses += snap.testCost;
+        totalAdditionalCharges += snap.additionalCharges;
+        totalDiscounts += snap.discount;
+        totalExpenses += snap.totalCost;
+        totalAmountPaid += snap.amountPaid;
+        if (snap.isLatestVisit) {
+          latestSnapDue = snap.outstandingDue;
+        }
+      } else {
+        totalTreatmentExpenses += parseFloat(v.totalTreatmentCost || '0');
+        totalTestExpenses += parseFloat(v.totalTestCost || '0');
+        totalAdditionalCharges += parseFloat(v.additionalCharges || '0');
+        totalDiscounts += parseFloat(v.discount || '0');
+        totalExpenses += parseFloat(v.totalCost || '0');
+        totalAmountPaid += parseFloat(v.amountPaid || '0');
+      }
     }
-    const totalOutstandingDue = Math.max(0, Number((totalExpenses - totalAmountPaid).toFixed(2)));
+
+    totalTreatmentExpenses = Number(totalTreatmentExpenses.toFixed(2));
+    totalTestExpenses = Number(totalTestExpenses.toFixed(2));
+    totalAdditionalCharges = Number(totalAdditionalCharges.toFixed(2));
+    totalDiscounts = Number(totalDiscounts.toFixed(2));
+    totalExpenses = Number(totalExpenses.toFixed(2));
+    totalAmountPaid = Number(totalAmountPaid.toFixed(2));
+    const totalOutstandingDue =
+      visitSnapshotMap.size > 0
+        ? latestSnapDue
+        : Math.max(0, Number((totalExpenses - totalAmountPaid).toFixed(2)));
 
     // Compute exact chronological running balance for every payment of this patient across visits
     const enrichedPaymentRecords = (() => {
@@ -1076,6 +1132,10 @@ apiRouter.get('/patients/:id', authenticateToken, async (req: AuthenticatedReque
       const isLatestVisit = snap ? snap.isLatestVisit : vIdx === 0;
       return {
         ...v,
+        totalTreatmentCost: snap ? snap.treatmentCost.toFixed(2) : v.totalTreatmentCost,
+        totalTestCost: snap ? snap.testCost.toFixed(2) : v.totalTestCost,
+        totalCost: snap ? snap.totalCost.toFixed(2) : v.totalCost,
+        amountPaid: snap ? snap.amountPaid.toFixed(2) : v.amountPaid,
         previousCarriedDue: snap?.previousCarriedDue ?? 0,
         cumulativePayable: snap?.cumulativePayable ?? parseFloat(v.totalCost || '0'),
         balanceAfterVisit: snap?.balanceAfterVisit ?? parseFloat(v.outstandingDue || '0'),
@@ -1416,20 +1476,40 @@ apiRouter.post('/visits', authenticateToken, async (req: AuthenticatedRequest, r
     const vDate = visitDate || new Date().toISOString().split('T')[0];
     const vTime = visitTime || new Date().toTimeString().slice(0, 5);
 
-    // Initial calculations
+    // Normalize treatments & tests so any item with cost > 0 or a name is always persisted and summed accurately
+    const normalizedTreatments = (Array.isArray(initialTreatments) ? initialTreatments : [])
+      .map((t: any) => ({
+        treatmentName: (t.treatmentName || '').trim() || (parseFloat(t.cost || 0) > 0 ? 'Dental Treatment' : ''),
+        description: t.description?.trim() || null,
+        toothNumber: t.toothNumber?.trim() || null,
+        cost: Number((parseFloat(t.cost || 0) || 0).toFixed(2)),
+        notes: t.notes?.trim() || null,
+      }))
+      .filter((t) => t.treatmentName.length > 0 || t.cost > 0);
+
+    const normalizedTests = (Array.isArray(initialTests) ? initialTests : [])
+      .map((t: any) => ({
+        testName: (t.testName || '').trim() || (parseFloat(t.cost || 0) > 0 ? 'Diagnostic Test / X-Ray' : ''),
+        category: t.category || 'Dental X-ray',
+        description: t.description?.trim() || null,
+        cost: Number((parseFloat(t.cost || 0) || 0).toFixed(2)),
+        notes: t.notes?.trim() || null,
+      }))
+      .filter((t) => t.testName.length > 0 || t.cost > 0);
+
     let treatmentCostTotal = 0;
-    for (const t of initialTreatments) {
-      treatmentCostTotal += parseFloat(t.cost || 0);
+    for (const t of normalizedTreatments) {
+      treatmentCostTotal += t.cost;
     }
 
     let testCostTotal = 0;
-    for (const t of initialTests) {
-      testCostTotal += parseFloat(t.cost || 0);
+    for (const t of normalizedTests) {
+      testCostTotal += t.cost;
     }
 
-    const addCharges = parseFloat(additionalCharges || 0);
-    const disc = parseFloat(discount || 0);
-    const totalCost = Math.max(0, treatmentCostTotal + testCostTotal + addCharges - disc);
+    const addCharges = parseFloat(additionalCharges || 0) || 0;
+    const disc = parseFloat(discount || 0) || 0;
+    const totalCost = Math.max(0, Number((treatmentCostTotal + testCostTotal + addCharges - disc).toFixed(2)));
 
     // Check previous carried-forward due for this patient
     const priorSnapshots = await recalculatePatientFinancials(patient.id);
@@ -1469,39 +1549,35 @@ apiRouter.post('/visits', authenticateToken, async (req: AuthenticatedRequest, r
       .returning();
 
     // Insert treatments if any
-    for (const t of initialTreatments) {
-      if (t.treatmentName) {
-        await db.insert(treatments).values({
-          visitId: newVisit.id,
-          patientId: patient.id,
-          doctorId: attendingDoctorId,
-          treatmentName: t.treatmentName.trim(),
-          description: t.description?.trim() || null,
-          toothNumber: t.toothNumber?.trim() || null,
-          cost: parseFloat(t.cost || 0).toFixed(2),
-          status: 'Completed',
-          notes: t.notes?.trim() || null,
-          treatmentDate: vDate,
-        });
-      }
+    for (const t of normalizedTreatments) {
+      await db.insert(treatments).values({
+        visitId: newVisit.id,
+        patientId: patient.id,
+        doctorId: attendingDoctorId,
+        treatmentName: t.treatmentName || 'Dental Treatment',
+        description: t.description,
+        toothNumber: t.toothNumber,
+        cost: t.cost.toFixed(2),
+        status: 'Completed',
+        notes: t.notes,
+        treatmentDate: vDate,
+      });
     }
 
     // Insert tests if any
-    for (const t of initialTests) {
-      if (t.testName) {
-        await db.insert(diagnosticTests).values({
-          visitId: newVisit.id,
-          patientId: patient.id,
-          doctorId: attendingDoctorId,
-          testName: t.testName.trim(),
-          category: t.category || 'Dental X-ray',
-          description: t.description?.trim() || null,
-          cost: parseFloat(t.cost || 0).toFixed(2),
-          status: 'Completed',
-          notes: t.notes?.trim() || null,
-          testDate: vDate,
-        });
-      }
+    for (const t of normalizedTests) {
+      await db.insert(diagnosticTests).values({
+        visitId: newVisit.id,
+        patientId: patient.id,
+        doctorId: attendingDoctorId,
+        testName: t.testName || 'Diagnostic Test / X-Ray',
+        category: t.category,
+        description: t.description,
+        cost: t.cost.toFixed(2),
+        status: 'Completed',
+        notes: t.notes,
+        testDate: vDate,
+      });
     }
 
     // Insert initial payment if any
@@ -1535,7 +1611,8 @@ apiRouter.post('/visits', authenticateToken, async (req: AuthenticatedRequest, r
     }
 
     // Synchronize the patient's entire visit chain so previous carried-forward dues and new visit balance are reconciled
-    await recalculatePatientFinancials(patient.id);
+    const afterSnapshots = await recalculatePatientFinancials(patient.id);
+    const finalSnap = afterSnapshots.get(newVisit.id);
 
     // Insert follow-up appointment if scheduled
     if (nextFollowUpDate) {
@@ -1553,16 +1630,20 @@ apiRouter.post('/visits', authenticateToken, async (req: AuthenticatedRequest, r
       req.user,
       'CREATE_VISIT',
       `Visit ${newVisit.visitId} for Patient ${patient.patientId} (${patient.name})`,
-      `Attending Doctor: ID ${attendingDoctorId}, Visit Cost: ৳${totalCost}, Carried Due: ৳${priorCarriedDue}, Paid: ৳${initPayAmount}, Latest Due: ৳${outstandingDue}`
+      `Attending Doctor: ID ${attendingDoctorId}, Treatment: ৳${treatmentCostTotal}, Visit Cost: ৳${totalCost}, Carried Due: ৳${priorCarriedDue}, Paid: ৳${initPayAmount}, Latest Due: ৳${finalSnap?.outstandingDue ?? outstandingDue}`
     );
 
     res.status(201).json({
       ...newVisit,
-      previousCarriedDue: priorCarriedDue,
-      cumulativePayable,
-      balanceAfterVisit: outstandingDue,
-      outstandingDue: outstandingDue.toFixed(2),
-      isLatestVisit: true,
+      totalTreatmentCost: (finalSnap?.treatmentCost ?? treatmentCostTotal).toFixed(2),
+      totalTestCost: (finalSnap?.testCost ?? testCostTotal).toFixed(2),
+      totalCost: (finalSnap?.totalCost ?? totalCost).toFixed(2),
+      amountPaid: (finalSnap?.amountPaid ?? initPayAmount).toFixed(2),
+      previousCarriedDue: finalSnap?.previousCarriedDue ?? priorCarriedDue,
+      cumulativePayable: finalSnap?.cumulativePayable ?? cumulativePayable,
+      balanceAfterVisit: finalSnap?.balanceAfterVisit ?? outstandingDue,
+      outstandingDue: (finalSnap?.outstandingDue ?? outstandingDue).toFixed(2),
+      isLatestVisit: finalSnap?.isLatestVisit ?? true,
     });
   } catch (error: any) {
     console.error('Error creating visit:', error);
@@ -2212,7 +2293,11 @@ apiRouter.get('/payments', authenticateToken, async (req: AuthenticatedRequest, 
     if (toDate && typeof toDate === 'string' && toDate.trim()) {
       conditions.push(sql`${payments.paymentDate} <= ${toDate.trim()}`);
     }
-    if (receivedBy && receivedBy !== 'All') {
+    // Role-based filtering in Payment & Dues menu:
+    // Main Doctor & Developer can filter any/all doctors; regular doctors can ONLY view/filter their own collections
+    if (req.user!.role === 'doctor') {
+      conditions.push(eq(payments.receivedBy, req.user!.id));
+    } else if (receivedBy && receivedBy !== 'All') {
       conditions.push(eq(payments.receivedBy, parseInt(receivedBy as string)));
     }
     if (search && typeof search === 'string') {
@@ -2317,6 +2402,125 @@ apiRouter.get('/payments', authenticateToken, async (req: AuthenticatedRequest, 
     res.json(enrichedPayments);
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to fetch payments' });
+  }
+});
+
+// Pending Dues endpoint specifically for the Payments & Dues menu
+// Main Doctor / Developer can filter all doctors' dues; regular Doctor is strictly scoped to their own dues only
+apiRouter.get('/payments/dues', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { doctorId, fromDate, toDate, search } = req.query;
+
+    const allVisitRefs = await db
+      .select({
+        id: visits.id,
+        visitId: visits.visitId,
+        patientId: visits.patientId,
+        patientCode: patients.patientId,
+        patientName: patients.name,
+        patientPhone: patients.phone,
+        doctorId: visits.doctorId,
+        doctorName: users.fullName,
+        doctorSpecialization: users.specialization,
+        visitDate: visits.visitDate,
+        visitTime: visits.visitTime,
+        diagnosis: visits.diagnosis,
+        totalTreatmentCost: visits.totalTreatmentCost,
+        totalTestCost: visits.totalTestCost,
+        additionalCharges: visits.additionalCharges,
+        discount: visits.discount,
+        totalCost: visits.totalCost,
+        amountPaid: visits.amountPaid,
+        outstandingDue: visits.outstandingDue,
+        status: visits.status,
+        createdAt: visits.createdAt,
+      })
+      .from(visits)
+      .innerJoin(patients, eq(visits.patientId, patients.id))
+      .innerJoin(users, eq(visits.doctorId, users.id))
+      .orderBy(asc(visits.visitDate), asc(visits.id));
+
+    const patientTotalVisitsMap = new Map<number, number>();
+    const patientLatestVisitIdMap = new Map<number, number>();
+    const patientRunningDueMap = new Map<number, number>();
+    const visitMetaMap = new Map<
+      number,
+      { seq: number; previousCarriedDue: number; cumulativePayable: number; balanceAfterVisit: number }
+    >();
+
+    for (const v of allVisitRefs) {
+      const seq = (patientTotalVisitsMap.get(v.patientId) || 0) + 1;
+      patientTotalVisitsMap.set(v.patientId, seq);
+      patientLatestVisitIdMap.set(v.patientId, v.id);
+
+      const prevDue = patientRunningDueMap.get(v.patientId) || 0;
+      const vNet = parseFloat(v.totalCost || '0');
+      const vPaid = parseFloat(v.amountPaid || '0');
+      const cumPayable = Number((prevDue + vNet).toFixed(2));
+      const balAfter = Math.max(0, Number((cumPayable - vPaid).toFixed(2)));
+      patientRunningDueMap.set(v.patientId, balAfter);
+      visitMetaMap.set(v.id, {
+        seq,
+        previousCarriedDue: prevDue,
+        cumulativePayable: cumPayable,
+        balanceAfterVisit: balAfter,
+      });
+    }
+
+    const isSuper = req.user!.role === 'main_doctor' || req.user!.role === 'developer';
+    const enforcedDoctorId = isSuper
+      ? doctorId && doctorId !== 'All'
+        ? parseInt(doctorId as string)
+        : null
+      : req.user!.id;
+
+    const searchLower = typeof search === 'string' && search.trim() ? search.trim().toLowerCase() : '';
+
+    const pendingDues = allVisitRefs
+      .filter((v) => {
+        const isLatest = patientLatestVisitIdMap.get(v.patientId) === v.id;
+        const meta = visitMetaMap.get(v.id);
+        const due = meta ? meta.balanceAfterVisit : parseFloat(v.outstandingDue || '0');
+        if (!isLatest || due <= 0.01) return false;
+        if (enforcedDoctorId !== null && !isNaN(enforcedDoctorId) && v.doctorId !== enforcedDoctorId) {
+          return false;
+        }
+        if (fromDate && typeof fromDate === 'string' && fromDate.trim() && v.visitDate < fromDate.trim()) {
+          return false;
+        }
+        if (toDate && typeof toDate === 'string' && toDate.trim() && v.visitDate > toDate.trim()) {
+          return false;
+        }
+        if (searchLower) {
+          const matches =
+            v.patientName.toLowerCase().includes(searchLower) ||
+            v.patientCode.toLowerCase().includes(searchLower) ||
+            v.patientPhone.includes(searchLower) ||
+            v.visitId.toLowerCase().includes(searchLower) ||
+            (v.diagnosis || '').toLowerCase().includes(searchLower);
+          if (!matches) return false;
+        }
+        return true;
+      })
+      .map((v) => {
+        const meta = visitMetaMap.get(v.id)!;
+        return {
+          ...v,
+          outstandingDue: meta.balanceAfterVisit.toFixed(2),
+          previousCarriedDue: meta.previousCarriedDue,
+          cumulativePayable: meta.cumulativePayable,
+          balanceAfterVisit: meta.balanceAfterVisit,
+          isLatestVisit: true,
+          visitSequenceNumber: meta.seq,
+          patientTotalVisits: patientTotalVisitsMap.get(v.patientId) || 1,
+        };
+      })
+      .sort((a, b) => b.visitDate.localeCompare(a.visitDate) || b.id - a.id);
+
+    res.json(pendingDues);
+  } catch (error: any) {
+    console.error('Error fetching pending dues:', error);
+    res.status(500).json({ error: 'Failed to fetch pending dues' });
   }
 });
 
@@ -2450,12 +2654,112 @@ apiRouter.delete('/payments/:id', authenticateToken, async (req: AuthenticatedRe
 });
 
 // ==========================================
-// 8. FOLLOW-UP TRACKING
+// 8. FOLLOW-UP TRACKING & CENTRALIZED SMS REMINDERS
 // ==========================================
+
+export interface SmsReminderLogEntry {
+  id: string;
+  appointmentId: number;
+  patientId: number;
+  patientCode: string;
+  patientName: string;
+  patientPhone: string;
+  doctorName: string;
+  followUpDate: string;
+  reason: string;
+  message: string;
+  sentBy: string;
+  sentAt: string;
+  channel: string;
+  status: 'Sent' | 'Delivered';
+}
+
+async function getSmsReminderLogs(): Promise<SmsReminderLogEntry[]> {
+  try {
+    const [row] = await db
+      .select()
+      .from(systemSettings)
+      .where(eq(systemSettings.key, 'sms_reminder_logs'));
+    if (!row || !row.value) return [];
+    const parsed = JSON.parse(row.value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveSmsReminderLogs(logs: SmsReminderLogEntry[]) {
+  const valStr = JSON.stringify(logs.slice(0, 500));
+  await db
+    .insert(systemSettings)
+    .values({
+      key: 'sms_reminder_logs',
+      value: valStr,
+      description: 'Centralized SMS follow-up reminder history',
+    })
+    .onConflictDoUpdate({
+      target: systemSettings.key,
+      set: { value: valStr, updatedAt: new Date() },
+    });
+}
+
+// Automatically ensure visits with nextFollowUpDate have corresponding appointment records
+async function syncVisitFollowUpsToAppointments() {
+  try {
+    const [visitsWithFollowUp, existingAppts] = await Promise.all([
+      db
+        .select({
+          id: visits.id,
+          patientId: visits.patientId,
+          doctorId: visits.doctorId,
+          nextFollowUpDate: visits.nextFollowUpDate,
+          diagnosis: visits.diagnosis,
+        })
+        .from(visits)
+        .where(sql`${visits.nextFollowUpDate} IS NOT NULL AND ${visits.nextFollowUpDate} != ''`),
+      db
+        .select({
+          visitId: appointments.visitId,
+          patientId: appointments.patientId,
+          followUpDate: appointments.followUpDate,
+        })
+        .from(appointments),
+    ]);
+
+    const existingKeys = new Set(
+      existingAppts.map((a) => `${a.patientId}:${a.followUpDate}`)
+    );
+
+    const toInsert = [];
+    for (const v of visitsWithFollowUp) {
+      if (!v.nextFollowUpDate) continue;
+      const key = `${v.patientId}:${v.nextFollowUpDate}`;
+      if (!existingKeys.has(key)) {
+        existingKeys.add(key);
+        toInsert.push({
+          patientId: v.patientId,
+          visitId: v.id,
+          doctorId: v.doctorId,
+          followUpDate: v.nextFollowUpDate,
+          reason: v.diagnosis ? `Follow-up for: ${v.diagnosis}` : 'Scheduled post-visit dental evaluation',
+          status: 'Scheduled',
+        });
+      }
+    }
+
+    if (toInsert.length > 0) {
+      await db.insert(appointments).values(toInsert);
+    }
+  } catch (e) {
+    console.error('Error syncing visit follow-ups:', e);
+  }
+}
 
 apiRouter.get('/appointments', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
-    const { status, doctorId, upcomingOnly } = req.query;
+    const { status, doctorId, upcomingOnly, followUpDate } = req.query;
+
+    await syncVisitFollowUpsToAppointments();
 
     const baseQuery = db
       .select({
@@ -2484,18 +2788,270 @@ apiRouter.get('/appointments', authenticateToken, async (req: AuthenticatedReque
     if (doctorId) {
       conditions.push(eq(appointments.doctorId, parseInt(doctorId as string)));
     }
+    if (followUpDate && typeof followUpDate === 'string' && followUpDate.trim()) {
+      conditions.push(eq(appointments.followUpDate, followUpDate.trim()));
+    }
     if (upcomingOnly === 'true') {
       const todayStr = new Date().toISOString().split('T')[0];
       conditions.push(sql`${appointments.followUpDate} >= ${todayStr}`);
     }
 
-    const list = conditions.length > 0
-      ? await baseQuery.where(and(...conditions)).orderBy(asc(appointments.followUpDate))
-      : await baseQuery.orderBy(desc(appointments.followUpDate));
+    const [list, smsLogs] = await Promise.all([
+      conditions.length > 0
+        ? baseQuery.where(and(...conditions)).orderBy(asc(appointments.followUpDate), asc(appointments.id))
+        : baseQuery.orderBy(asc(appointments.followUpDate), desc(appointments.id)),
+      getSmsReminderLogs(),
+    ]);
 
-    res.json(list);
+    const smsByAppointment = new Map<number, SmsReminderLogEntry[]>();
+    for (const log of smsLogs) {
+      if (!smsByAppointment.has(log.appointmentId)) {
+        smsByAppointment.set(log.appointmentId, []);
+      }
+      smsByAppointment.get(log.appointmentId)!.push(log);
+    }
+
+    const enriched = list.map((a) => {
+      const apptLogs = smsByAppointment.get(a.id) || [];
+      const latestSms = apptLogs[0] || null;
+      return {
+        ...a,
+        smsReminderSent: apptLogs.length > 0,
+        smsSentCount: apptLogs.length,
+        lastSmsSentAt: latestSms?.sentAt || null,
+        lastSmsMessage: latestSms?.message || null,
+      };
+    });
+
+    res.json(enriched);
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to load follow-ups' });
+  }
+});
+
+apiRouter.get('/appointments/sms-logs', authenticateToken, async (_req: AuthenticatedRequest, res) => {
+  try {
+    const [logs, settingsRows] = await Promise.all([
+      getSmsReminderLogs(),
+      db.select().from(systemSettings),
+    ]);
+    const settingsMap: Record<string, string> = {};
+    for (const s of settingsRows) {
+      settingsMap[s.key] = s.value;
+    }
+
+    res.json({
+      logs,
+      clinicName: settingsMap.clinic_name || 'Dental Care',
+      clinicPhone: settingsMap.clinic_phone || '+880 1711-234567',
+      smsTemplate:
+        settingsMap.sms_reminder_template ||
+        'Dear {patientName} ({patientId}), friendly reminder from {clinicName}: Your dental follow-up is scheduled for {followUpDate} with {doctorName} ({reason}). Contact: {clinicPhone}.',
+      smsGatewayUrl: settingsMap.sms_gateway_url || '',
+      smsGatewayApiKey: settingsMap.sms_gateway_api_key || '',
+      defaultMessagingChannel: settingsMap.default_messaging_channel || 'whatsapp',
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to load SMS reminder logs' });
+  }
+});
+
+apiRouter.post('/appointments/test-sms-gateway', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { gatewayUrl, gatewayApiKey } = req.body;
+    if (!gatewayUrl || typeof gatewayUrl !== 'string' || !gatewayUrl.trim().startsWith('http')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid Android Gateway HTTP/HTTPS URL (e.g. http://192.168.1.100:8080/send).',
+      });
+    }
+
+    const cleanUrl = gatewayUrl.trim();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+
+    try {
+      const response = await fetch(cleanUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(gatewayApiKey ? { Authorization: `Bearer ${gatewayApiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          to: '+8801700000000',
+          phone: '+8801700000000',
+          number: '+8801700000000',
+          message: 'Dental Care: Android SIM Gateway Ping Test (OK)',
+          test: true,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      return res.json({
+        success: true,
+        statusCode: response.status,
+        message: `Android SIM Gateway responded successfully with HTTP ${response.status}! Ready for zero-cost SMS sending.`,
+      });
+    } catch (fetchErr: any) {
+      clearTimeout(timer);
+      return res.json({
+        success: false,
+        message: `Gateway unreachable (${fetchErr.name === 'AbortError' ? 'Connection timeout after 4.5s' : fetchErr.message}). Ensure Android phone is on the same Wi-Fi and the SMS gateway app is running.`,
+      });
+    }
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: err.message || 'Server error testing gateway' });
+  }
+});
+
+apiRouter.post('/appointments/send-sms-reminders', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { appointmentIds, messageTemplate, gatewayUrl, gatewayApiKey, channel } = req.body;
+
+    if (!Array.isArray(appointmentIds) || appointmentIds.length === 0) {
+      return res.status(400).json({ error: 'Please select at least one follow-up patient to send SMS reminders.' });
+    }
+
+    const cleanIds = appointmentIds.map((id) => parseInt(String(id), 10)).filter((id) => !isNaN(id));
+    if (cleanIds.length === 0) {
+      return res.status(400).json({ error: 'Invalid appointment IDs provided.' });
+    }
+
+    const [targetAppointments, settingsRows, existingLogs] = await Promise.all([
+      db
+        .select({
+          id: appointments.id,
+          patientId: appointments.patientId,
+          patientCode: patients.patientId,
+          patientName: patients.name,
+          patientPhone: patients.phone,
+          doctorName: users.fullName,
+          followUpDate: appointments.followUpDate,
+          reason: appointments.reason,
+        })
+        .from(appointments)
+        .innerJoin(patients, eq(appointments.patientId, patients.id))
+        .innerJoin(users, eq(appointments.doctorId, users.id))
+        .where(inArray(appointments.id, cleanIds)),
+      db.select().from(systemSettings),
+      getSmsReminderLogs(),
+    ]);
+
+    if (targetAppointments.length === 0) {
+      return res.status(404).json({ error: 'No matching follow-up appointments found.' });
+    }
+
+    const settingsMap: Record<string, string> = {};
+    for (const s of settingsRows) {
+      settingsMap[s.key] = s.value;
+    }
+
+    const clinicName = settingsMap.clinic_name || 'Dental Care';
+    const clinicPhone = settingsMap.clinic_phone || '+880 1711-234567';
+    const activeTemplate =
+      (typeof messageTemplate === 'string' && messageTemplate.trim()) ||
+      settingsMap.sms_reminder_template ||
+      'Dear {patientName} ({patientId}), friendly reminder from {clinicName}: Your dental follow-up is scheduled for {followUpDate} with {doctorName} ({reason}). Contact: {clinicPhone}.';
+
+    // Save template preference if updated
+    if (typeof messageTemplate === 'string' && messageTemplate.trim()) {
+      await db
+        .insert(systemSettings)
+        .values({
+          key: 'sms_reminder_template',
+          value: messageTemplate.trim(),
+          description: 'Default SMS follow-up reminder template',
+        })
+        .onConflictDoUpdate({
+          target: systemSettings.key,
+          set: { value: messageTemplate.trim(), updatedAt: new Date() },
+        });
+    }
+
+    const activeGatewayUrl = (typeof gatewayUrl === 'string' ? gatewayUrl.trim() : '') || settingsMap.sms_gateway_url || '';
+    const activeGatewayKey = (typeof gatewayApiKey === 'string' ? gatewayApiKey.trim() : '') || settingsMap.sms_gateway_api_key || '';
+    const nowIso = new Date().toISOString();
+    const newEntries: SmsReminderLogEntry[] = [];
+
+    // Determine target channel
+    const dispatchChannel = channel || (activeGatewayUrl ? 'Free Android SIM Gateway' : 'Central Clinic SMS Dispatch');
+
+    for (const appt of targetAppointments) {
+      const personalizedMessage = activeTemplate
+        .replace(/\{patientName\}/g, appt.patientName)
+        .replace(/\{patientId\}/g, appt.patientCode)
+        .replace(/\{followUpDate\}/g, appt.followUpDate)
+        .replace(/\{doctorName\}/g, appt.doctorName)
+        .replace(/\{reason\}/g, appt.reason)
+        .replace(/\{clinicName\}/g, clinicName)
+        .replace(/\{clinicPhone\}/g, clinicPhone);
+
+      // If channel is Android SIM Gateway or we have an active gateway URL, forward request
+      if ((dispatchChannel === 'Free Android SIM Gateway' || !channel) && activeGatewayUrl) {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 4000);
+          await fetch(activeGatewayUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(activeGatewayKey ? { Authorization: `Bearer ${activeGatewayKey}` } : {}),
+            },
+            body: JSON.stringify({
+              to: appt.patientPhone,
+              phone: appt.patientPhone,
+              number: appt.patientPhone,
+              message: personalizedMessage,
+              patientId: appt.patientCode,
+              followUpDate: appt.followUpDate,
+              sender: clinicName,
+            }),
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+        } catch (gwErr) {
+          console.warn('Android SIM gateway forward error (recorded in logs):', gwErr);
+        }
+      }
+
+      newEntries.push({
+        id: `SMS-${Date.now()}-${appt.id}`,
+        appointmentId: appt.id,
+        patientId: appt.patientId,
+        patientCode: appt.patientCode,
+        patientName: appt.patientName,
+        patientPhone: appt.patientPhone,
+        doctorName: appt.doctorName,
+        followUpDate: appt.followUpDate,
+        reason: appt.reason,
+        message: personalizedMessage,
+        sentBy: req.user!.fullName,
+        sentAt: nowIso,
+        channel: dispatchChannel,
+        status: 'Sent',
+      });
+    }
+
+    const combinedLogs = [...newEntries, ...existingLogs];
+    await saveSmsReminderLogs(combinedLogs);
+
+    await logAudit(
+      req.user,
+      'SEND_CENTRAL_SMS_REMINDER',
+      `Follow-Up Reminder (${newEntries.length} via ${dispatchChannel})`,
+      `Recipients: ${newEntries.map((e) => `${e.patientName} (${e.patientPhone}) for ${e.followUpDate}`).join('; ')}`
+    );
+
+    res.status(200).json({
+      success: true,
+      channel: dispatchChannel,
+      sentCount: newEntries.length,
+      results: newEntries,
+    });
+  } catch (error: any) {
+    console.error('Error sending SMS reminders:', error);
+    res.status(500).json({ error: 'Failed to dispatch SMS reminders' });
   }
 });
 
@@ -2623,6 +3179,7 @@ apiRouter.get('/dashboard/stats', authenticateToken, async (req: AuthenticatedRe
             totalTreatments: (await db.select({ count: count() }).from(treatments))[0]?.count || 0,
             totalDiagnosticTests: (await db.select({ count: count() }).from(diagnosticTests))[0]?.count || 0,
             totalPayments: (await db.select({ count: count() }).from(payments))[0]?.count || 0,
+            totalPrescriptions: (await db.select({ count: count() }).from(prescriptions))[0]?.count || 0,
             totalAuditLogs: (await db.select({ count: count() }).from(auditLogs))[0]?.count || 0,
           }
         : null;
@@ -2750,9 +3307,56 @@ function sendCsv(res: Response, filename: string, headers: string[], rows: (stri
   res.status(200).send(csvContent);
 }
 
+function getDateFilterRange(query: any): { fromDate: string | null; toDate: string | null; suffix: string } {
+  const fromDate = typeof query.fromDate === 'string' && query.fromDate.trim() ? query.fromDate.trim() : null;
+  const toDate = typeof query.toDate === 'string' && query.toDate.trim() ? query.toDate.trim() : null;
+  const today = new Date().toISOString().split('T')[0];
+  const suffix =
+    fromDate && toDate
+      ? `${fromDate}_to_${toDate}`
+      : fromDate
+      ? `from_${fromDate}`
+      : toDate
+      ? `until_${toDate}`
+      : `all_${today}`;
+  return { fromDate, toDate, suffix };
+}
+
 apiRouter.get('/export/patients.csv', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
-    const patientList = await db.select().from(patients).orderBy(asc(patients.id));
+    const { fromDate, toDate, suffix } = getDateFilterRange(req.query);
+    const conditions = [];
+    if (fromDate) conditions.push(sql`${patients.registrationDate} >= ${fromDate}`);
+    if (toDate) conditions.push(sql`${patients.registrationDate} <= ${toDate}`);
+
+    const patientList =
+      conditions.length > 0
+        ? await db.select().from(patients).where(and(...conditions)).orderBy(asc(patients.id))
+        : await db.select().from(patients).orderBy(asc(patients.id));
+
+    const allVisitRows =
+      patientList.length > 0
+        ? await db
+            .select({
+              id: visits.id,
+              patientId: visits.patientId,
+              visitDate: visits.visitDate,
+              treatmentCost: visits.totalTreatmentCost,
+              testCost: visits.totalTestCost,
+              cost: visits.totalCost,
+              paid: visits.amountPaid,
+            })
+            .from(visits)
+            .where(inArray(visits.patientId, patientList.map((p) => p.id)))
+            .orderBy(asc(visits.visitDate), asc(visits.id))
+        : [];
+
+    const visitsByPat = new Map<number, typeof allVisitRows>();
+    for (const vr of allVisitRows) {
+      const arr = visitsByPat.get(vr.patientId) || [];
+      arr.push(vr);
+      visitsByPat.set(vr.patientId, arr);
+    }
 
     const headers = [
       'Patient ID',
@@ -2766,52 +3370,53 @@ apiRouter.get('/export/patients.csv', authenticateToken, async (req: Authenticat
       'Existing Diseases',
       'Allergies',
       'Visit Count',
-      'Total Expenses (BDT)',
+      'Treatment Expenses (BDT)',
+      'Test / X-ray Expenses (BDT)',
+      'Total Patient Cost (BDT)',
       'Total Paid (BDT)',
       'Total Outstanding Due (BDT)',
     ];
 
-    const rows = await Promise.all(
-      patientList.map(async (p) => {
-        const vRows = await db
-          .select({
-            cost: visits.totalCost,
-            paid: visits.amountPaid,
-            due: visits.outstandingDue,
-          })
-          .from(visits)
-          .where(eq(visits.patientId, p.id));
+    const rows = patientList.map((p) => {
+      const vRows = visitsByPat.get(p.id) || [];
+      let totTx = 0;
+      let totTest = 0;
+      let totCost = 0;
+      let totPaid = 0;
+      let runningDue = 0;
 
-        let totCost = 0;
-        let totPaid = 0;
-        let totDue = 0;
-        for (const v of vRows) {
-          totCost += parseFloat(v.cost || '0');
-          totPaid += parseFloat(v.paid || '0');
-          totDue += parseFloat(v.due || '0');
-        }
+      for (const v of vRows) {
+        const net = parseFloat(v.cost || '0');
+        const paid = parseFloat(v.paid || '0');
+        totTx += parseFloat(v.treatmentCost || '0');
+        totTest += parseFloat(v.testCost || '0');
+        totCost += net;
+        totPaid += paid;
+        runningDue = Math.max(0, Number((runningDue + net - paid).toFixed(2)));
+      }
 
-        return [
-          p.patientId,
-          p.name,
-          p.phone,
-          p.altPhone || '',
-          p.age || '',
-          p.gender,
-          p.address || '',
-          p.registrationDate,
-          p.existingDiseases || '',
-          p.allergies || '',
-          vRows.length,
-          totCost.toFixed(2),
-          totPaid.toFixed(2),
-          totDue.toFixed(2),
-        ];
-      })
-    );
+      return [
+        p.patientId,
+        p.name,
+        p.phone,
+        p.altPhone || '',
+        p.age || '',
+        p.gender,
+        p.address || '',
+        p.registrationDate,
+        p.existingDiseases || '',
+        p.allergies || '',
+        vRows.length,
+        totTx.toFixed(2),
+        totTest.toFixed(2),
+        totCost.toFixed(2),
+        totPaid.toFixed(2),
+        runningDue.toFixed(2),
+      ];
+    });
 
-    await logAudit(req.user, 'EXPORT_CSV', 'Patients CSV', `Exported ${rows.length} patient records`);
-    sendCsv(res, `dental_patients_${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
+    await logAudit(req.user, 'EXPORT_CSV', 'Patients CSV', `Exported ${rows.length} patient records (${suffix})`);
+    sendCsv(res, `dental_care_patients_${suffix}.csv`, headers, rows);
   } catch (error: any) {
     res.status(500).json({ error: 'Export failed' });
   }
@@ -2819,7 +3424,12 @@ apiRouter.get('/export/patients.csv', authenticateToken, async (req: Authenticat
 
 apiRouter.get('/export/visits.csv', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
-    const visitList = await db
+    const { fromDate, toDate, suffix } = getDateFilterRange(req.query);
+    const conditions = [];
+    if (fromDate) conditions.push(sql`${visits.visitDate} >= ${fromDate}`);
+    if (toDate) conditions.push(sql`${visits.visitDate} <= ${toDate}`);
+
+    const baseQuery = db
       .select({
         visitId: visits.visitId,
         patientCode: patients.patientId,
@@ -2840,8 +3450,12 @@ apiRouter.get('/export/visits.csv', authenticateToken, async (req: Authenticated
       })
       .from(visits)
       .innerJoin(patients, eq(visits.patientId, patients.id))
-      .innerJoin(users, eq(visits.doctorId, users.id))
-      .orderBy(desc(visits.id));
+      .innerJoin(users, eq(visits.doctorId, users.id));
+
+    const visitList =
+      conditions.length > 0
+        ? await baseQuery.where(and(...conditions)).orderBy(desc(visits.visitDate), desc(visits.id))
+        : await baseQuery.orderBy(desc(visits.visitDate), desc(visits.id));
 
     const headers = [
       'Visit ID',
@@ -2881,8 +3495,74 @@ apiRouter.get('/export/visits.csv', authenticateToken, async (req: Authenticated
       v.status,
     ]);
 
-    await logAudit(req.user, 'EXPORT_CSV', 'Visits CSV', `Exported ${rows.length} visit records`);
-    sendCsv(res, `dental_visits_${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
+    await logAudit(req.user, 'EXPORT_CSV', 'Visits CSV', `Exported ${rows.length} visit records (${suffix})`);
+    sendCsv(res, `dental_care_visits_${suffix}.csv`, headers, rows);
+  } catch (error: any) {
+    res.status(500).json({ error: 'Export failed' });
+  }
+});
+
+apiRouter.get('/export/treatments.csv', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { fromDate, toDate, suffix } = getDateFilterRange(req.query);
+    const conditions = [];
+    if (fromDate) conditions.push(sql`${treatments.treatmentDate} >= ${fromDate}`);
+    if (toDate) conditions.push(sql`${treatments.treatmentDate} <= ${toDate}`);
+
+    const baseQuery = db
+      .select({
+        id: treatments.id,
+        patientCode: patients.patientId,
+        patientName: patients.name,
+        visitCode: visits.visitId,
+        doctorName: users.fullName,
+        treatmentName: treatments.treatmentName,
+        toothNumber: treatments.toothNumber,
+        description: treatments.description,
+        cost: treatments.cost,
+        status: treatments.status,
+        treatmentDate: treatments.treatmentDate,
+      })
+      .from(treatments)
+      .innerJoin(patients, eq(treatments.patientId, patients.id))
+      .innerJoin(visits, eq(treatments.visitId, visits.id))
+      .innerJoin(users, eq(treatments.doctorId, users.id));
+
+    const list =
+      conditions.length > 0
+        ? await baseQuery.where(and(...conditions)).orderBy(desc(treatments.treatmentDate), desc(treatments.id))
+        : await baseQuery.orderBy(desc(treatments.treatmentDate), desc(treatments.id));
+
+    const headers = [
+      'Treatment ID',
+      'Patient ID',
+      'Patient Name',
+      'Visit ID',
+      'Performing Doctor',
+      'Treatment Name',
+      'Tooth Number',
+      'Description',
+      'Cost (BDT)',
+      'Status',
+      'Treatment Date',
+    ];
+
+    const rows = list.map((t) => [
+      t.id,
+      t.patientCode,
+      t.patientName,
+      t.visitCode,
+      t.doctorName,
+      t.treatmentName,
+      t.toothNumber || '',
+      t.description || '',
+      t.cost,
+      t.status,
+      t.treatmentDate,
+    ]);
+
+    await logAudit(req.user, 'EXPORT_CSV', 'Treatments CSV', `Exported ${rows.length} treatment records (${suffix})`);
+    sendCsv(res, `dental_care_treatments_${suffix}.csv`, headers, rows);
   } catch (error: any) {
     res.status(500).json({ error: 'Export failed' });
   }
@@ -2890,7 +3570,22 @@ apiRouter.get('/export/visits.csv', authenticateToken, async (req: Authenticated
 
 apiRouter.get('/export/payments.csv', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
-    const paymentList = await db
+    const { fromDate, toDate, suffix } = getDateFilterRange(req.query);
+    const { method, receivedBy } = req.query;
+
+    const conditions = [];
+    if (fromDate) conditions.push(sql`${payments.paymentDate} >= ${fromDate}`);
+    if (toDate) conditions.push(sql`${payments.paymentDate} <= ${toDate}`);
+    if (method && typeof method === 'string' && method !== 'All') {
+      conditions.push(eq(payments.paymentMethod, method));
+    }
+    if (req.user!.role === 'doctor') {
+      conditions.push(eq(payments.receivedBy, req.user!.id));
+    } else if (receivedBy && typeof receivedBy === 'string' && receivedBy !== 'All') {
+      conditions.push(eq(payments.receivedBy, parseInt(receivedBy)));
+    }
+
+    const baseQuery = db
       .select({
         paymentId: payments.paymentId,
         patientCode: patients.patientId,
@@ -2906,8 +3601,12 @@ apiRouter.get('/export/payments.csv', authenticateToken, async (req: Authenticat
       .from(payments)
       .innerJoin(patients, eq(payments.patientId, patients.id))
       .innerJoin(visits, eq(payments.visitId, visits.id))
-      .leftJoin(users, eq(payments.receivedBy, users.id))
-      .orderBy(desc(payments.id));
+      .leftJoin(users, eq(payments.receivedBy, users.id));
+
+    const paymentList =
+      conditions.length > 0
+        ? await baseQuery.where(and(...conditions)).orderBy(desc(payments.paymentDate), desc(payments.id))
+        : await baseQuery.orderBy(desc(payments.paymentDate), desc(payments.id));
 
     const headers = [
       'Payment ID',
@@ -2935,8 +3634,8 @@ apiRouter.get('/export/payments.csv', authenticateToken, async (req: Authenticat
       p.notes || '',
     ]);
 
-    await logAudit(req.user, 'EXPORT_CSV', 'Payments CSV', `Exported ${rows.length} payment records`);
-    sendCsv(res, `dental_payments_${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
+    await logAudit(req.user, 'EXPORT_CSV', 'Payments CSV', `Exported ${rows.length} payment records (${suffix})`);
+    sendCsv(res, `dental_care_payments_${suffix}.csv`, headers, rows);
   } catch (error: any) {
     res.status(500).json({ error: 'Export failed' });
   }
@@ -2944,7 +3643,12 @@ apiRouter.get('/export/payments.csv', authenticateToken, async (req: Authenticat
 
 apiRouter.get('/export/diagnostic-tests.csv', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {
-    const testList = await db
+    const { fromDate, toDate, suffix } = getDateFilterRange(req.query);
+    const conditions = [];
+    if (fromDate) conditions.push(sql`${diagnosticTests.testDate} >= ${fromDate}`);
+    if (toDate) conditions.push(sql`${diagnosticTests.testDate} <= ${toDate}`);
+
+    const baseQuery = db
       .select({
         testId: diagnosticTests.id,
         patientCode: patients.patientId,
@@ -2961,8 +3665,12 @@ apiRouter.get('/export/diagnostic-tests.csv', authenticateToken, async (req: Aut
       .from(diagnosticTests)
       .innerJoin(patients, eq(diagnosticTests.patientId, patients.id))
       .innerJoin(visits, eq(diagnosticTests.visitId, visits.id))
-      .innerJoin(users, eq(diagnosticTests.doctorId, users.id))
-      .orderBy(desc(diagnosticTests.id));
+      .innerJoin(users, eq(diagnosticTests.doctorId, users.id));
+
+    const testList =
+      conditions.length > 0
+        ? await baseQuery.where(and(...conditions)).orderBy(desc(diagnosticTests.testDate), desc(diagnosticTests.id))
+        : await baseQuery.orderBy(desc(diagnosticTests.testDate), desc(diagnosticTests.id));
 
     const headers = [
       'Test Record ID',
@@ -2992,10 +3700,477 @@ apiRouter.get('/export/diagnostic-tests.csv', authenticateToken, async (req: Aut
       t.notes || '',
     ]);
 
-    await logAudit(req.user, 'EXPORT_CSV', 'Diagnostic Tests CSV', `Exported ${rows.length} test records`);
-    sendCsv(res, `dental_tests_xrays_${new Date().toISOString().split('T')[0]}.csv`, headers, rows);
+    await logAudit(req.user, 'EXPORT_CSV', 'Diagnostic Tests CSV', `Exported ${rows.length} test records (${suffix})`);
+    sendCsv(res, `dental_care_tests_xrays_${suffix}.csv`, headers, rows);
   } catch (error: any) {
     res.status(500).json({ error: 'Export failed' });
+  }
+});
+
+// Complete All-Data CSV Backup (Patients + Visits + Treatments + Diagnostic Tests + Payments + Follow-ups)
+// Supports optional fromDate & toDate filtering or full unfiltered 100% database CSV download
+apiRouter.get('/export/complete-data.csv', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { fromDate, toDate, suffix } = getDateFilterRange(req.query);
+    const isSuper = req.user!.role === 'main_doctor' || req.user!.role === 'developer';
+
+    const patientConditions = [];
+    if (fromDate) patientConditions.push(sql`${patients.registrationDate} >= ${fromDate}`);
+    if (toDate) patientConditions.push(sql`${patients.registrationDate} <= ${toDate}`);
+
+    const visitConditions = [];
+    if (fromDate) visitConditions.push(sql`${visits.visitDate} >= ${fromDate}`);
+    if (toDate) visitConditions.push(sql`${visits.visitDate} <= ${toDate}`);
+
+    const treatmentConditions = [];
+    if (fromDate) treatmentConditions.push(sql`${treatments.treatmentDate} >= ${fromDate}`);
+    if (toDate) treatmentConditions.push(sql`${treatments.treatmentDate} <= ${toDate}`);
+
+    const testConditions = [];
+    if (fromDate) testConditions.push(sql`${diagnosticTests.testDate} >= ${fromDate}`);
+    if (toDate) testConditions.push(sql`${diagnosticTests.testDate} <= ${toDate}`);
+
+    const paymentConditions = [];
+    if (fromDate) paymentConditions.push(sql`${payments.paymentDate} >= ${fromDate}`);
+    if (toDate) paymentConditions.push(sql`${payments.paymentDate} <= ${toDate}`);
+    if (!isSuper) paymentConditions.push(eq(payments.receivedBy, req.user!.id));
+
+    const apptConditions = [];
+    if (fromDate) apptConditions.push(sql`${appointments.followUpDate} >= ${fromDate}`);
+    if (toDate) apptConditions.push(sql`${appointments.followUpDate} <= ${toDate}`);
+
+    const [
+      patientList,
+      allVisitsForPatientTotals,
+      visitList,
+      treatmentList,
+      testList,
+      paymentList,
+      appointmentList,
+    ] = await Promise.all([
+      patientConditions.length > 0
+        ? db.select().from(patients).where(and(...patientConditions)).orderBy(asc(patients.id))
+        : db.select().from(patients).orderBy(asc(patients.id)),
+      db
+        .select({
+          id: visits.id,
+          patientId: visits.patientId,
+          visitDate: visits.visitDate,
+          treatmentCost: visits.totalTreatmentCost,
+          testCost: visits.totalTestCost,
+          totalCost: visits.totalCost,
+          amountPaid: visits.amountPaid,
+        })
+        .from(visits)
+        .orderBy(asc(visits.visitDate), asc(visits.id)),
+      (() => {
+        const q = db
+          .select({
+            visitId: visits.visitId,
+            patientCode: patients.patientId,
+            patientName: patients.name,
+            doctorName: users.fullName,
+            visitDate: visits.visitDate,
+            visitTime: visits.visitTime,
+            complaints: visits.complaints,
+            diagnosis: visits.diagnosis,
+            treatmentCost: visits.totalTreatmentCost,
+            testCost: visits.totalTestCost,
+            additionalCharges: visits.additionalCharges,
+            discount: visits.discount,
+            totalCost: visits.totalCost,
+            amountPaid: visits.amountPaid,
+            outstandingDue: visits.outstandingDue,
+            nextFollowUpDate: visits.nextFollowUpDate,
+            notes: visits.notes,
+            status: visits.status,
+          })
+          .from(visits)
+          .innerJoin(patients, eq(visits.patientId, patients.id))
+          .innerJoin(users, eq(visits.doctorId, users.id));
+        return visitConditions.length > 0
+          ? q.where(and(...visitConditions)).orderBy(desc(visits.visitDate), desc(visits.id))
+          : q.orderBy(desc(visits.visitDate), desc(visits.id));
+      })(),
+      (() => {
+        const q = db
+          .select({
+            id: treatments.id,
+            patientCode: patients.patientId,
+            patientName: patients.name,
+            visitCode: visits.visitId,
+            doctorName: users.fullName,
+            treatmentName: treatments.treatmentName,
+            toothNumber: treatments.toothNumber,
+            description: treatments.description,
+            cost: treatments.cost,
+            status: treatments.status,
+            treatmentDate: treatments.treatmentDate,
+          })
+          .from(treatments)
+          .innerJoin(patients, eq(treatments.patientId, patients.id))
+          .innerJoin(visits, eq(treatments.visitId, visits.id))
+          .innerJoin(users, eq(treatments.doctorId, users.id));
+        return treatmentConditions.length > 0
+          ? q.where(and(...treatmentConditions)).orderBy(desc(treatments.treatmentDate), desc(treatments.id))
+          : q.orderBy(desc(treatments.treatmentDate), desc(treatments.id));
+      })(),
+      (() => {
+        const q = db
+          .select({
+            id: diagnosticTests.id,
+            patientCode: patients.patientId,
+            patientName: patients.name,
+            visitCode: visits.visitId,
+            doctorName: users.fullName,
+            testName: diagnosticTests.testName,
+            category: diagnosticTests.category,
+            description: diagnosticTests.description,
+            cost: diagnosticTests.cost,
+            status: diagnosticTests.status,
+            testDate: diagnosticTests.testDate,
+          })
+          .from(diagnosticTests)
+          .innerJoin(patients, eq(diagnosticTests.patientId, patients.id))
+          .innerJoin(visits, eq(diagnosticTests.visitId, visits.id))
+          .innerJoin(users, eq(diagnosticTests.doctorId, users.id));
+        return testConditions.length > 0
+          ? q.where(and(...testConditions)).orderBy(desc(diagnosticTests.testDate), desc(diagnosticTests.id))
+          : q.orderBy(desc(diagnosticTests.testDate), desc(diagnosticTests.id));
+      })(),
+      (() => {
+        const q = db
+          .select({
+            paymentId: payments.paymentId,
+            patientCode: patients.patientId,
+            patientName: patients.name,
+            visitCode: visits.visitId,
+            amount: payments.amount,
+            paymentMethod: payments.paymentMethod,
+            transactionRef: payments.transactionRef,
+            receiverName: users.fullName,
+            paymentDate: payments.paymentDate,
+            notes: payments.notes,
+          })
+          .from(payments)
+          .innerJoin(patients, eq(payments.patientId, patients.id))
+          .innerJoin(visits, eq(payments.visitId, visits.id))
+          .leftJoin(users, eq(payments.receivedBy, users.id));
+        return paymentConditions.length > 0
+          ? q.where(and(...paymentConditions)).orderBy(desc(payments.paymentDate), desc(payments.id))
+          : q.orderBy(desc(payments.paymentDate), desc(payments.id));
+      })(),
+      (() => {
+        const q = db
+          .select({
+            id: appointments.id,
+            patientCode: patients.patientId,
+            patientName: patients.name,
+            patientPhone: patients.phone,
+            doctorName: users.fullName,
+            followUpDate: appointments.followUpDate,
+            reason: appointments.reason,
+            status: appointments.status,
+            notes: appointments.notes,
+          })
+          .from(appointments)
+          .innerJoin(patients, eq(appointments.patientId, patients.id))
+          .innerJoin(users, eq(appointments.doctorId, users.id));
+        return apptConditions.length > 0
+          ? q.where(and(...apptConditions)).orderBy(desc(appointments.followUpDate), desc(appointments.id))
+          : q.orderBy(desc(appointments.followUpDate), desc(appointments.id));
+      })(),
+    ]);
+
+    const visitsByPat = new Map<number, typeof allVisitsForPatientTotals>();
+    for (const vr of allVisitsForPatientTotals) {
+      const arr = visitsByPat.get(vr.patientId) || [];
+      arr.push(vr);
+      visitsByPat.set(vr.patientId, arr);
+    }
+
+    const csvEscape = (cell: any) => {
+      if (cell === null || cell === undefined) return '""';
+      return `"${String(cell).replace(/"/g, '""')}"`;
+    };
+    const rowLine = (cols: any[]) => cols.map(csvEscape).join(',');
+
+    const lines: string[] = [];
+    lines.push(rowLine(['Dental Care — Complete Clinic Data Backup (CSV)']));
+    lines.push(
+      rowLine([
+        'Generated At',
+        new Date().toISOString(),
+        'Date Filter',
+        fromDate || toDate ? `${fromDate || 'Beginning'} to ${toDate || 'Present'}` : 'All Complete Data (Unfiltered)',
+        'Exported By',
+        `${req.user!.fullName} (${req.user!.role})`,
+      ])
+    );
+    lines.push('');
+
+    // SECTION 1: PATIENTS
+    lines.push(rowLine([`=== SECTION 1: PATIENTS MASTER RECORDS (${patientList.length}) ===`]));
+    lines.push(
+      rowLine([
+        'Patient ID',
+        'Name',
+        'Phone',
+        'Alternative Phone',
+        'Age',
+        'Gender',
+        'Address',
+        'Registration Date',
+        'Allergies',
+        'Existing Diseases',
+        'Visits',
+        'Treatment Expenses (BDT)',
+        'Test / X-ray Expenses (BDT)',
+        'Total Patient Cost (BDT)',
+        'Total Paid (BDT)',
+        'Total Outstanding Due (BDT)',
+      ])
+    );
+    for (const p of patientList) {
+      const vRows = visitsByPat.get(p.id) || [];
+      let tx = 0;
+      let tst = 0;
+      let cost = 0;
+      let paid = 0;
+      let due = 0;
+      for (const v of vRows) {
+        const net = parseFloat(v.totalCost || '0');
+        const pAmt = parseFloat(v.amountPaid || '0');
+        tx += parseFloat(v.treatmentCost || '0');
+        tst += parseFloat(v.testCost || '0');
+        cost += net;
+        paid += pAmt;
+        due = Math.max(0, Number((due + net - pAmt).toFixed(2)));
+      }
+      lines.push(
+        rowLine([
+          p.patientId,
+          p.name,
+          p.phone,
+          p.altPhone || '',
+          p.age || '',
+          p.gender,
+          p.address || '',
+          p.registrationDate,
+          p.allergies || '',
+          p.existingDiseases || '',
+          vRows.length,
+          tx.toFixed(2),
+          tst.toFixed(2),
+          cost.toFixed(2),
+          paid.toFixed(2),
+          due.toFixed(2),
+        ])
+      );
+    }
+    lines.push('');
+
+    // SECTION 2: VISITS
+    lines.push(rowLine([`=== SECTION 2: CLINIC VISITS & ENCOUNTERS (${visitList.length}) ===`]));
+    lines.push(
+      rowLine([
+        'Visit ID',
+        'Patient ID',
+        'Patient Name',
+        'Attending Doctor',
+        'Visit Date',
+        'Visit Time',
+        'Complaints',
+        'Diagnosis',
+        'Treatment Charges (BDT)',
+        'Test Charges (BDT)',
+        'Other Charges (BDT)',
+        'Discount (BDT)',
+        'Total Visit Cost (BDT)',
+        'Amount Paid (BDT)',
+        'Outstanding Due (BDT)',
+        'Next Follow-Up Date',
+        'Notes',
+        'Status',
+      ])
+    );
+    for (const v of visitList) {
+      lines.push(
+        rowLine([
+          v.visitId,
+          v.patientCode,
+          v.patientName,
+          v.doctorName,
+          v.visitDate,
+          v.visitTime || '',
+          v.complaints || '',
+          v.diagnosis || '',
+          v.treatmentCost,
+          v.testCost,
+          v.additionalCharges,
+          v.discount,
+          v.totalCost,
+          v.amountPaid,
+          v.outstandingDue,
+          v.nextFollowUpDate || '',
+          v.notes || '',
+          v.status,
+        ])
+      );
+    }
+    lines.push('');
+
+    // SECTION 3: TREATMENTS
+    lines.push(rowLine([`=== SECTION 3: ITEMIZED TREATMENTS (${treatmentList.length}) ===`]));
+    lines.push(
+      rowLine([
+        'Treatment ID',
+        'Patient ID',
+        'Patient Name',
+        'Visit ID',
+        'Doctor',
+        'Treatment Name',
+        'Tooth #',
+        'Description',
+        'Cost (BDT)',
+        'Status',
+        'Treatment Date',
+      ])
+    );
+    for (const t of treatmentList) {
+      lines.push(
+        rowLine([
+          t.id,
+          t.patientCode,
+          t.patientName,
+          t.visitCode,
+          t.doctorName,
+          t.treatmentName,
+          t.toothNumber || '',
+          t.description || '',
+          t.cost,
+          t.status,
+          t.treatmentDate,
+        ])
+      );
+    }
+    lines.push('');
+
+    // SECTION 4: DIAGNOSTIC TESTS
+    lines.push(rowLine([`=== SECTION 4: DIAGNOSTIC TESTS & X-RAYS (${testList.length}) ===`]));
+    lines.push(
+      rowLine([
+        'Test ID',
+        'Patient ID',
+        'Patient Name',
+        'Visit ID',
+        'Referring Doctor',
+        'Test / X-ray Name',
+        'Category',
+        'Description',
+        'Cost (BDT)',
+        'Status',
+        'Test Date',
+      ])
+    );
+    for (const t of testList) {
+      lines.push(
+        rowLine([
+          t.id,
+          t.patientCode,
+          t.patientName,
+          t.visitCode,
+          t.doctorName,
+          t.testName,
+          t.category,
+          t.description || '',
+          t.cost,
+          t.status,
+          t.testDate,
+        ])
+      );
+    }
+    lines.push('');
+
+    // SECTION 5: PAYMENTS
+    lines.push(rowLine([`=== SECTION 5: PAYMENTS & INSTALLMENT RECEIPTS (${paymentList.length}) ===`]));
+    lines.push(
+      rowLine([
+        'Payment ID',
+        'Patient ID',
+        'Patient Name',
+        'Visit ID',
+        'Amount (BDT)',
+        'Payment Method',
+        'Transaction Ref',
+        'Received By',
+        'Payment Date',
+        'Notes',
+      ])
+    );
+    for (const p of paymentList) {
+      lines.push(
+        rowLine([
+          p.paymentId,
+          p.patientCode,
+          p.patientName,
+          p.visitCode,
+          p.amount,
+          p.paymentMethod,
+          p.transactionRef || '',
+          p.receiverName || '',
+          p.paymentDate,
+          p.notes || '',
+        ])
+      );
+    }
+    lines.push('');
+
+    // SECTION 6: FOLLOW-UP APPOINTMENTS
+    lines.push(rowLine([`=== SECTION 6: FOLLOW-UP APPOINTMENTS (${appointmentList.length}) ===`]));
+    lines.push(
+      rowLine([
+        'Appointment ID',
+        'Patient ID',
+        'Patient Name',
+        'Phone',
+        'Doctor',
+        'Follow-Up Date',
+        'Reason',
+        'Status',
+        'Notes',
+      ])
+    );
+    for (const a of appointmentList) {
+      lines.push(
+        rowLine([
+          a.id,
+          a.patientCode,
+          a.patientName,
+          a.patientPhone,
+          a.doctorName,
+          a.followUpDate,
+          a.reason,
+          a.status,
+          a.notes || '',
+        ])
+      );
+    }
+
+    await logAudit(
+      req.user,
+      'EXPORT_COMPLETE_CSV',
+      'Complete Clinic Data Backup CSV',
+      `Exported ${patientList.length} patients, ${visitList.length} visits, ${treatmentList.length} treatments, ${testList.length} tests, ${paymentList.length} payments, ${appointmentList.length} appointments (${suffix})`
+    );
+
+    const filename = `dental_care_complete_data_${suffix}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.status(200).send('\uFEFF' + lines.join('\n'));
+  } catch (error: any) {
+    console.error('Complete CSV export failed:', error);
+    res.status(500).json({ error: 'Complete CSV export failed' });
   }
 });
 
@@ -3105,9 +4280,14 @@ apiRouter.get(
       const allAppointments = await db.select().from(appointments);
       const allSettings = await db.select().from(systemSettings);
       const allAuditLogs = await db.select().from(auditLogs);
+      const allFeatureFlags = await db.select().from(applicationFeatureFlags);
+      const allPrescriptions = await db.select().from(prescriptions);
+      const allPrescriptionMedicines = await db.select().from(prescriptionMedicines);
+      const allPrescriptionRevisions = await db.select().from(prescriptionRevisions);
+      const allPrescriptionAuditLogs = await db.select().from(prescriptionAuditLogs);
 
       const backupData = {
-        version: '1.0',
+        version: '1.1',
         exportedAt: new Date().toISOString(),
         tables: {
           users: allUsers,
@@ -3119,6 +4299,11 @@ apiRouter.get(
           appointments: allAppointments,
           systemSettings: allSettings,
           auditLogs: allAuditLogs,
+          applicationFeatureFlags: allFeatureFlags,
+          prescriptions: allPrescriptions,
+          prescriptionMedicines: allPrescriptionMedicines,
+          prescriptionRevisions: allPrescriptionRevisions,
+          prescriptionAuditLogs: allPrescriptionAuditLogs,
         },
       };
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { Sidebar } from './components/Sidebar.tsx';
@@ -13,6 +13,8 @@ import { DoctorsPage } from './pages/DoctorsPage.tsx';
 import { ExportsPage } from './pages/ExportsPage.tsx';
 import { AuditLogsPage } from './pages/AuditLogsPage.tsx';
 import { SettingsPage } from './pages/SettingsPage.tsx';
+import { PrescriptionsPage } from './pages/PrescriptionsPage.tsx';
+import { DeveloperProfilePage } from './pages/DeveloperProfilePage.tsx';
 
 import { PatientModal } from './components/PatientModal.tsx';
 import { NewVisitModal } from './components/NewVisitModal.tsx';
@@ -20,15 +22,33 @@ import { RecordPaymentModal } from './components/RecordPaymentModal.tsx';
 import { AddTreatmentModal } from './components/AddTreatmentModal.tsx';
 import { AddTestModal } from './components/AddTestModal.tsx';
 import { DoctorModal } from './components/DoctorModal.tsx';
-import { Patient, User } from './types/index.ts';
+import { PrescriptionFormModal } from './components/PrescriptionFormModal.tsx';
+import { PrescriptionPreviewModal } from './components/PrescriptionPreviewModal.tsx';
+import { Patient, Prescription, User } from './types/index.ts';
 import { api } from './services/api.ts';
 import { Activity } from 'lucide-react';
 
+function resolveInitialTab(): string {
+  if (typeof window === 'undefined') return 'dashboard';
+  const params = new URLSearchParams(window.location.search);
+  const tabParam = (params.get('tab') || '').toLowerCase();
+  const path = window.location.pathname.toLowerCase();
+  const hash = window.location.hash.toLowerCase();
+
+  if (tabParam === 'prescriptions' || path.includes('/prescriptions') || hash.includes('prescriptions')) {
+    return 'prescriptions';
+  }
+  if (tabParam === 'developer-profile' || path.includes('/developer-profile')) {
+    return 'developer-profile';
+  }
+  return 'dashboard';
+}
+
 function AppContent() {
-  const { user, loading } = useAuth();
+  const { user, loading, prescriptionManagementEnabled } = useAuth();
 
   // Navigation tab
-  const [currentTab, setCurrentTab] = useState<string>('dashboard');
+  const [currentTab, setCurrentTab] = useState<string>(() => resolveInitialTab());
   const [selectedPatientId, setSelectedPatientId] = useState<number | null>(null);
 
   // Modal states
@@ -51,15 +71,32 @@ function AppContent() {
   const [doctorModalOpen, setDoctorModalOpen] = useState(false);
   const [doctorToEdit, setDoctorToEdit] = useState<User | null>(null);
 
+  // Prescription modal states
+  const [rxFormOpen, setRxFormOpen] = useState(false);
+  const [rxFormPatientId, setRxFormPatientId] = useState<number | null>(null);
+  const [rxFormVisitId, setRxFormVisitId] = useState<number | null>(null);
+  const [rxToEdit, setRxToEdit] = useState<Prescription | null>(null);
+
+  const [rxPreviewOpen, setRxPreviewOpen] = useState(false);
+  const [rxPreviewId, setRxPreviewId] = useState<number | null>(null);
+
   // Trigger state refresh key when sub-modals save
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Immediately close open prescription modals if developer disables feature globally
+  useEffect(() => {
+    if (!prescriptionManagementEnabled) {
+      setRxFormOpen(false);
+      setRxPreviewOpen(false);
+    }
+  }, [prescriptionManagementEnabled]);
 
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-teal-400 gap-3">
         <Activity className="w-10 h-10 animate-spin" />
         <span className="text-sm font-semibold tracking-wide text-slate-300">
-          Loading Dental Clinic Portal...
+          Loading Dental Care Portal...
         </span>
       </div>
     );
@@ -138,6 +175,29 @@ function AppContent() {
     setDoctorModalOpen(true);
   };
 
+  const handleOpenCreatePrescription = (patientId?: number, visitId?: number) => {
+    if (!prescriptionManagementEnabled) return;
+    setRxToEdit(null);
+    setRxFormPatientId(patientId ?? null);
+    setRxFormVisitId(visitId ?? null);
+    setRxFormOpen(true);
+  };
+
+  const handleOpenEditDraftPrescription = (rx: Prescription) => {
+    if (!prescriptionManagementEnabled) return;
+    setRxPreviewOpen(false);
+    setRxFormPatientId(rx.patientId);
+    setRxFormVisitId(rx.visitId);
+    setRxToEdit(rx);
+    setRxFormOpen(true);
+  };
+
+  const handleOpenPreviewPrescription = (prescriptionId: number) => {
+    if (!prescriptionManagementEnabled) return;
+    setRxPreviewId(prescriptionId);
+    setRxPreviewOpen(true);
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col text-slate-900 font-sans antialiased">
       <Navbar
@@ -150,89 +210,119 @@ function AppContent() {
       <div className="flex-1 flex flex-col md:flex-row">
         <Sidebar currentTab={currentTab} setCurrentTab={setCurrentTab} />
 
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full">
-          {currentTab === 'dashboard' && (
-            <DashboardPage
-              key={refreshKey}
-              onNavigate={navigateToTab}
-              onSelectPatient={handleOpenPatientDetail}
-              onOpenPaymentForPatient={handleOpenPaymentForPatient}
-              onOpenRecordPayment={handleOpenRecordPayment}
-              onOpenNewPatient={() => {
-                setPatientToEdit(null);
-                setPatientModalOpen(true);
-              }}
-              onOpenNewVisit={(patient) => handleOpenNewVisit(patient)}
-            />
-          )}
+        <main className="flex-1 p-3 sm:p-6 lg:p-8 pb-24 md:pb-8 max-w-7xl mx-auto w-full flex flex-col justify-between">
+          <div>
+            {currentTab === 'dashboard' && (
+              <DashboardPage
+                key={refreshKey}
+                onNavigate={navigateToTab}
+                onSelectPatient={handleOpenPatientDetail}
+                onOpenPaymentForPatient={handleOpenPaymentForPatient}
+                onOpenRecordPayment={handleOpenRecordPayment}
+                onOpenNewPatient={() => {
+                  setPatientToEdit(null);
+                  setPatientModalOpen(true);
+                }}
+                onOpenNewVisit={(patient) => handleOpenNewVisit(patient)}
+              />
+            )}
 
-          {(currentTab === 'patients' || currentTab === 'my-patients') && (
-            <PatientsPage
-              key={`${currentTab}-${refreshKey}`}
-              mode={currentTab === 'my-patients' ? 'own' : 'central'}
-              onSelectPatient={handleOpenPatientDetail}
-              onOpenNewPatientModal={() => {
-                setPatientToEdit(null);
-                setPatientModalOpen(true);
-              }}
-              onOpenNewVisitForPatient={(patient) => handleOpenNewVisit(patient)}
-              onOpenPaymentForPatient={handleOpenPaymentForPatient}
-            />
-          )}
+            {(currentTab === 'patients' || currentTab === 'my-patients') && (
+              <PatientsPage
+                key={`${currentTab}-${refreshKey}`}
+                mode={currentTab === 'my-patients' ? 'own' : 'central'}
+                onSelectPatient={handleOpenPatientDetail}
+                onOpenNewPatientModal={() => {
+                  setPatientToEdit(null);
+                  setPatientModalOpen(true);
+                }}
+                onOpenNewVisitForPatient={(patient) => handleOpenNewVisit(patient)}
+                onOpenPaymentForPatient={handleOpenPaymentForPatient}
+              />
+            )}
 
-          {currentTab === 'patient-detail' && selectedPatientId && (
-            <PatientDetailPage
-              key={selectedPatientId}
-              patientId={selectedPatientId}
-              refreshKey={refreshKey}
-              onBack={() => setCurrentTab('patients')}
-              onOpenNewVisit={(patient) => handleOpenNewVisit(patient)}
-              onOpenRecordPayment={handleOpenRecordPayment}
-              onOpenAddTreatment={handleOpenAddTreatment}
-              onOpenAddTest={handleOpenAddTest}
-              onOpenEditPatient={(p) => {
-                setPatientToEdit(p);
-                setPatientModalOpen(true);
-              }}
-            />
-          )}
+            {currentTab === 'patient-detail' && selectedPatientId && (
+              <PatientDetailPage
+                key={selectedPatientId}
+                patientId={selectedPatientId}
+                refreshKey={refreshKey}
+                onBack={() => setCurrentTab('patients')}
+                onOpenNewVisit={(patient) => handleOpenNewVisit(patient)}
+                onOpenRecordPayment={handleOpenRecordPayment}
+                onOpenAddTreatment={handleOpenAddTreatment}
+                onOpenAddTest={handleOpenAddTest}
+                onOpenEditPatient={(p) => {
+                  setPatientToEdit(p);
+                  setPatientModalOpen(true);
+                }}
+                onOpenCreatePrescription={handleOpenCreatePrescription}
+                onPreviewPrescription={handleOpenPreviewPrescription}
+                onEditDraftPrescription={handleOpenEditDraftPrescription}
+                onClonedPrescription={handleOpenEditDraftPrescription}
+              />
+            )}
 
-          {currentTab === 'visits' && (
-            <VisitsPage
-              key={refreshKey}
-              onSelectPatient={handleOpenPatientDetail}
-              onSelectVisit={(visitId, patientId) => {
-                if (patientId) handleOpenPatientDetail(patientId);
-              }}
-              onOpenNewVisit={() => handleOpenNewVisit()}
-              onOpenRecordPayment={handleOpenRecordPayment}
-            />
-          )}
+            {currentTab === 'visits' && (
+              <VisitsPage
+                key={refreshKey}
+                onSelectPatient={handleOpenPatientDetail}
+                onSelectVisit={(visitId, patientId) => {
+                  if (patientId) handleOpenPatientDetail(patientId);
+                }}
+                onOpenNewVisit={() => handleOpenNewVisit()}
+                onOpenRecordPayment={handleOpenRecordPayment}
+                onOpenCreatePrescription={(pId, vId) => handleOpenCreatePrescription(pId, vId)}
+              />
+            )}
 
-          {currentTab === 'payments' && (
-            <PaymentsPage
-              key={refreshKey}
-              onSelectPatient={handleOpenPatientDetail}
-              onOpenRecordPayment={handleOpenRecordPayment}
-            />
-          )}
+            {currentTab === 'prescriptions' && (
+              <PrescriptionsPage
+                key={refreshKey}
+                refreshKey={refreshKey}
+                onSelectPatient={handleOpenPatientDetail}
+                onOpenCreatePrescription={() => handleOpenCreatePrescription()}
+                onPreviewPrescription={handleOpenPreviewPrescription}
+                onEditDraftPrescription={handleOpenEditDraftPrescription}
+                onClonedPrescription={handleOpenEditDraftPrescription}
+              />
+            )}
 
-          {currentTab === 'followups' && (
-            <FollowUpsPage
-              key={refreshKey}
-              onSelectPatient={handleOpenPatientDetail}
-            />
-          )}
+            {currentTab === 'payments' && (
+              <PaymentsPage
+                key={refreshKey}
+                onSelectPatient={handleOpenPatientDetail}
+                onOpenRecordPayment={handleOpenRecordPayment}
+              />
+            )}
 
-          {currentTab === 'doctors' && (
-            <DoctorsPage key={refreshKey} onOpenDoctorModal={handleOpenDoctorModal} />
-          )}
+            {currentTab === 'followups' && (
+              <FollowUpsPage
+                key={refreshKey}
+                onSelectPatient={handleOpenPatientDetail}
+              />
+            )}
 
-          {currentTab === 'exports' && <ExportsPage />}
+            {currentTab === 'doctors' && (
+              <DoctorsPage key={refreshKey} onOpenDoctorModal={handleOpenDoctorModal} />
+            )}
 
-          {currentTab === 'audit-logs' && <AuditLogsPage key={refreshKey} />}
+            {currentTab === 'exports' && <ExportsPage />}
 
-          {currentTab === 'settings' && <SettingsPage key={refreshKey} />}
+            {currentTab === 'audit-logs' && <AuditLogsPage key={refreshKey} />}
+
+            {currentTab === 'settings' && <SettingsPage key={refreshKey} />}
+
+            {currentTab === 'developer-profile' && <DeveloperProfilePage />}
+          </div>
+
+          <footer className="mt-10 pt-4 border-t border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
+            <span>
+              <strong className="text-slate-700">Dental Care</strong> · Centralized Clinic &amp; Multi-Doctor Management Portal
+            </span>
+            <span>
+              Lead Developer: <strong className="text-teal-700">Aymon</strong>
+            </span>
+          </footer>
         </main>
       </div>
 
@@ -316,6 +406,49 @@ function AppContent() {
           setRefreshKey((k) => k + 1);
         }}
       />
+
+      {prescriptionManagementEnabled && (
+        <>
+          <PrescriptionFormModal
+            isOpen={rxFormOpen}
+            onClose={() => {
+              setRxFormOpen(false);
+              setRxToEdit(null);
+              setRxFormPatientId(null);
+              setRxFormVisitId(null);
+            }}
+            patientId={rxFormPatientId}
+            defaultVisitId={rxFormVisitId}
+            editingPrescription={rxToEdit}
+            onSaved={(savedRx, openPreview) => {
+              setRxFormOpen(false);
+              setRxToEdit(null);
+              setRefreshKey((k) => k + 1);
+              if (openPreview) {
+                setRxPreviewId(savedRx.id);
+                setRxPreviewOpen(true);
+              }
+            }}
+          />
+
+          <PrescriptionPreviewModal
+            isOpen={rxPreviewOpen}
+            prescriptionId={rxPreviewId}
+            onClose={() => {
+              setRxPreviewOpen(false);
+              setRxPreviewId(null);
+            }}
+            onEditDraft={(rx) => handleOpenEditDraftPrescription(rx)}
+            onCreatedNewDraft={(newDraft) => {
+              setRefreshKey((k) => k + 1);
+              handleOpenEditDraftPrescription(newDraft);
+            }}
+            onUpdated={() => {
+              setRefreshKey((k) => k + 1);
+            }}
+          />
+        </>
+      )}
     </div>
   );
 }

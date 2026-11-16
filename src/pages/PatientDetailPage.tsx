@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
-import { PatientDetailedProfile, Visit } from '../types/index.ts';
+import { PatientDetailedProfile, Prescription, Visit } from '../types/index.ts';
 import {
   ArrowLeft,
   CalendarCheck,
@@ -30,6 +30,7 @@ import {
   Calculator,
 } from 'lucide-react';
 import { UndoPaymentConfirmModal, UndoPaymentTarget } from '../components/UndoPaymentConfirmModal.tsx';
+import { PatientPrescriptionHistory } from '../components/PatientPrescriptionHistory.tsx';
 
 interface PatientDetailPageProps {
   patientId: number;
@@ -40,6 +41,10 @@ interface PatientDetailPageProps {
   onOpenAddTreatment: (visitId: number, visitCode: string) => void;
   onOpenAddTest: (visitId: number, visitCode: string) => void;
   onOpenEditPatient: (patient: any) => void;
+  onOpenCreatePrescription?: (patientId: number, visitId?: number) => void;
+  onPreviewPrescription?: (prescriptionId: number) => void;
+  onEditDraftPrescription?: (rx: Prescription) => void;
+  onClonedPrescription?: (newDraft: Prescription) => void;
 }
 
 export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
@@ -51,16 +56,36 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
   onOpenAddTreatment,
   onOpenAddTest,
   onOpenEditPatient,
+  onOpenCreatePrescription,
+  onPreviewPrescription,
+  onEditDraftPrescription,
+  onClonedPrescription,
 }) => {
-  const { user } = useAuth();
+  const { user, prescriptionManagementEnabled } = useAuth();
   const [profile, setProfile] = useState<PatientDetailedProfile | null>(null);
   const [activeTab, setActiveTab] = useState<
-    'overview' | 'visits' | 'doctors' | 'medical' | 'treatments' | 'tests' | 'payments' | 'notes'
+    | 'overview'
+    | 'visits'
+    | 'doctors'
+    | 'medical'
+    | 'treatments'
+    | 'tests'
+    | 'payments'
+    | 'notes'
+    | 'prescriptions'
   >('overview');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [undoTargetPayment, setUndoTargetPayment] = useState<UndoPaymentTarget | null>(null);
   const [voidingId, setVoidingId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!prescriptionManagementEnabled && activeTab === 'prescriptions') {
+      setActiveTab('overview');
+    }
+  }, [prescriptionManagementEnabled, activeTab]);
+
+  const requestCounterRef = React.useRef(0);
 
   useEffect(() => {
     loadPatient(true);
@@ -73,14 +98,22 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
   }, [refreshKey]);
 
   const loadPatient = async (showSpinner = true) => {
+    const reqId = ++requestCounterRef.current;
     if (showSpinner) setLoading(true);
     try {
       const data = await api.getPatient(patientId);
-      setProfile(data);
+      if (reqId === requestCounterRef.current) {
+        setProfile(data);
+        setError(null);
+      }
     } catch (err: any) {
-      setError(err.message || 'Failed to load patient');
+      if (reqId === requestCounterRef.current) {
+        setError(err.message || 'Failed to load patient');
+      }
     } finally {
-      if (showSpinner) setLoading(false);
+      if (showSpinner && reqId === requestCounterRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -151,6 +184,9 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
       badge: latestOutstandingDue > 0 ? `৳${latestOutstandingDue.toLocaleString()} Due` : undefined,
     },
     { id: 'notes', label: `8. Notes & Follow-ups (${profile.appointments.length})`, icon: Clock },
+    ...(prescriptionManagementEnabled
+      ? [{ id: 'prescriptions', label: '9. Prescription History', icon: FileText }]
+      : []),
   ];
 
   // Outstanding Dues Tracker Component (Always shows latest account state)
@@ -710,6 +746,17 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
             </button>
           )}
 
+          {prescriptionManagementEnabled && onOpenCreatePrescription && (
+            <button
+              type="button"
+              onClick={() => onOpenCreatePrescription(profile.id, latestVisit?.id)}
+              className="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+            >
+              <FileText className="w-4 h-4" />
+              <span>Create Prescription</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => onOpenEditPatient(profile)}
@@ -730,7 +777,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
       </div>
 
       {/* Financial & Clinical Summary Highlights */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
         <div className="bg-white p-3.5 rounded-xl border border-slate-200">
           <span className="text-slate-500 block mb-0.5">Total Visits</span>
           <span className="text-xl font-bold text-slate-900">{profile.stats.totalVisits}</span>
@@ -755,8 +802,20 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
           <span className="text-[11px] text-slate-500 block mt-0.5">OPG, IOPA, CBCT</span>
         </div>
 
+        <div className="bg-white p-3.5 rounded-xl border border-teal-200 bg-teal-50/20">
+          <span className="text-teal-800 font-medium block mb-0.5">Total Patient Cost</span>
+          <span className="text-xl font-extrabold text-slate-900">
+            ৳{profile.financialSummary.totalExpenses.toLocaleString()}
+          </span>
+          <span className="text-[11px] text-slate-500 block mt-0.5">
+            {profile.financialSummary.totalDiscounts > 0
+              ? `After ৳${profile.financialSummary.totalDiscounts.toLocaleString()} disc.`
+              : 'Net bill across visits'}
+          </span>
+        </div>
+
         <div className="bg-white p-3.5 rounded-xl border border-slate-200">
-          <span className="text-slate-500 block mb-0.5">Total Paid</span>
+          <span className="text-slate-500 block mb-0.5">Payment Received</span>
           <span className="text-xl font-bold text-emerald-700">
             ৳{profile.financialSummary.totalAmountPaid.toLocaleString()}
           </span>
@@ -764,7 +823,7 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
         </div>
 
         <div className="bg-white p-3.5 rounded-xl border border-slate-200">
-          <span className="text-slate-500 block mb-0.5">Patient-Wide Due</span>
+          <span className="text-slate-500 block mb-0.5">Due</span>
           <span
             className={`text-xl font-extrabold ${
               profile.financialSummary.totalOutstandingDue > 0 ? 'text-amber-800' : 'text-emerald-700'
@@ -1097,6 +1156,16 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                               <span>Settled ({v.payments?.length || 0} receipt{v.payments?.length === 1 ? '' : 's'})</span>
                             </span>
+                          )}
+                          {prescriptionManagementEnabled && onOpenCreatePrescription && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenCreatePrescription(profile.id, v.id)}
+                              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                            >
+                              <FileText className="w-3.5 h-3.5" />
+                              <span>Create Prescription</span>
+                            </button>
                           )}
                         </div>
                       </div>
@@ -1975,6 +2044,19 @@ export const PatientDetailPage: React.FC<PatientDetailPageProps> = ({
               </div>
             )}
           </div>
+        )}
+
+        {/* TAB 9: PRESCRIPTION HISTORY (ONLY WHEN ENABLED BY DEVELOPER) */}
+        {activeTab === 'prescriptions' && prescriptionManagementEnabled && (
+          <PatientPrescriptionHistory
+            patientId={profile.id}
+            visits={profile.visits}
+            refreshKey={refreshKey}
+            onCreatePrescription={(visitId) => onOpenCreatePrescription?.(profile.id, visitId)}
+            onPreviewPrescription={(rxId) => onPreviewPrescription?.(rxId)}
+            onEditDraftPrescription={(rx) => onEditDraftPrescription?.(rx)}
+            onClonedPrescription={(newDraft) => onClonedPrescription?.(newDraft)}
+          />
         )}
       </div>
 

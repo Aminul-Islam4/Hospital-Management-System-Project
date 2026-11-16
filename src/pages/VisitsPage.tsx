@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
 import { Visit, User } from '../types/index.ts';
 import {
@@ -9,6 +10,7 @@ import {
   Plus,
   Eye,
   FileSpreadsheet,
+  FileText,
   Tag,
   X,
   RotateCcw,
@@ -22,6 +24,7 @@ interface VisitsPageProps {
   onSelectPatient?: (patientId: number) => void;
   onOpenNewVisit: () => void;
   onOpenRecordPayment: (visit: any, initialMode?: 'payment' | 'discount') => void;
+  onOpenCreatePrescription?: (patientId: number, visitId: number) => void;
 }
 
 export const VisitsPage: React.FC<VisitsPageProps> = ({
@@ -29,7 +32,9 @@ export const VisitsPage: React.FC<VisitsPageProps> = ({
   onSelectPatient,
   onOpenNewVisit,
   onOpenRecordPayment,
+  onOpenCreatePrescription,
 }) => {
+  const { prescriptionManagementEnabled } = useAuth();
   const [visits, setVisits] = useState<Visit[]>([]);
   const [doctors, setDoctors] = useState<User[]>([]);
   const [selectedDoctorId, setSelectedDoctorId] = useState<string>('All');
@@ -123,7 +128,14 @@ export const VisitsPage: React.FC<VisitsPageProps> = ({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => api.downloadCsv('/api/export/visits.csv', 'dental_visits.csv')}
+            onClick={() => {
+              const params = new URLSearchParams();
+              if (fromDate.trim()) params.set('fromDate', fromDate.trim());
+              if (toDate.trim()) params.set('toDate', toDate.trim());
+              if (selectedDoctorId !== 'All') params.set('doctorId', selectedDoctorId);
+              const qs = params.toString() ? `?${params.toString()}` : '';
+              api.downloadCsv(`/api/export/visits.csv${qs}`, 'dental_visits.csv');
+            }}
             className="px-3 py-2 text-xs font-semibold rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
@@ -456,6 +468,18 @@ export const VisitsPage: React.FC<VisitsPageProps> = ({
                               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                               <span>Settled</span>
                             </span>
+                          )}
+
+                          {prescriptionManagementEnabled && onOpenCreatePrescription && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenCreatePrescription(v.patientId, v.id)}
+                              className="h-7 px-2.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded border border-indigo-200 transition-colors flex items-center gap-1 cursor-pointer"
+                              title="Create Prescription for this Visit"
+                            >
+                              <FileText className="w-3.5 h-3.5" />
+                              <span>Rx</span>
+                            </button>
                           )}
 
                           <button

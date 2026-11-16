@@ -14,8 +14,11 @@ export interface UserPayload {
   fullName: string;
   role: 'main_doctor' | 'developer' | 'doctor';
   email?: string | null;
+  phone?: string | null;
   isActive: boolean;
   specialization?: string | null;
+  qualifications?: string | null;
+  registrationNumber?: string | null;
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -73,8 +76,11 @@ export async function authenticateToken(
           fullName: foundUser.fullName,
           role: foundUser.role as any,
           email: foundUser.email,
+          phone: foundUser.phone,
           isActive: foundUser.isActive,
           specialization: foundUser.specialization,
+          qualifications: foundUser.qualifications,
+          registrationNumber: foundUser.registrationNumber,
         };
         return next();
       }
@@ -135,8 +141,11 @@ export async function authenticateToken(
           fullName: foundUser.fullName,
           role: foundUser.role as any,
           email: foundUser.email,
+          phone: foundUser.phone,
           isActive: foundUser.isActive,
           specialization: foundUser.specialization,
+          qualifications: foundUser.qualifications,
+          registrationNumber: foundUser.registrationNumber,
         };
         return next();
       }

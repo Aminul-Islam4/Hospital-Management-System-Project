@@ -24,6 +24,7 @@ export const DoctorModal: React.FC<DoctorModalProps> = ({
     phone: '',
     specialization: '',
     qualifications: '',
+    registrationNumber: '',
     role: 'doctor',
   });
 
@@ -40,6 +41,7 @@ export const DoctorModal: React.FC<DoctorModalProps> = ({
         phone: doctorToEdit.phone || '',
         specialization: doctorToEdit.specialization || '',
         qualifications: doctorToEdit.qualifications || '',
+        registrationNumber: doctorToEdit.registrationNumber || '',
         role: doctorToEdit.role,
       });
     } else {
@@ -51,6 +53,7 @@ export const DoctorModal: React.FC<DoctorModalProps> = ({
         phone: '',
         specialization: '',
         qualifications: '',
+        registrationNumber: '',
         role: 'doctor',
       });
     }
@@ -81,6 +84,7 @@ export const DoctorModal: React.FC<DoctorModalProps> = ({
           phone: formData.phone,
           specialization: formData.specialization,
           qualifications: formData.qualifications,
+          registrationNumber: formData.registrationNumber,
         });
         onSaved(updated);
       } else {
@@ -92,6 +96,7 @@ export const DoctorModal: React.FC<DoctorModalProps> = ({
           phone: formData.phone,
           specialization: formData.specialization,
           qualifications: formData.qualifications,
+          registrationNumber: formData.registrationNumber,
           role: formData.role as any,
         });
         onSaved(created);
@@ -225,6 +230,19 @@ export const DoctorModal: React.FC<DoctorModalProps> = ({
               placeholder="e.g. BDS (DDC), FCPS (Part-II), PGT"
               value={formData.qualifications}
               onChange={(e) => setFormData({ ...formData, qualifications: e.target.value })}
+              className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:ring-2 focus:ring-teal-500"
+            />
+          </div>
+
+          <div>
+            <label className="block font-semibold text-slate-700 mb-1">
+              Registration / BMDC Number (for Prescriptions)
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. BMDC Reg: A-51904"
+              value={formData.registrationNumber}
+              onChange={(e) => setFormData({ ...formData, registrationNumber: e.target.value })}
               className="w-full px-2.5 py-1.5 border border-slate-300 rounded focus:ring-2 focus:ring-teal-500"
             />
           </div>

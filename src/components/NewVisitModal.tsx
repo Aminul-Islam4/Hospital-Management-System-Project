@@ -248,17 +248,17 @@ export const NewVisitModal: React.FC<NewVisitModalProps> = ({
         additionalCharges: addCharges,
         discount: disc,
         initialTreatments: treatments
-          .filter((t) => t.treatmentName.trim().length > 0)
+          .filter((t) => t.treatmentName.trim().length > 0 || (parseFloat(t.cost) || 0) > 0)
           .map((t) => ({
-            treatmentName: t.treatmentName.trim(),
+            treatmentName: t.treatmentName.trim() || 'Dental Treatment',
             description: t.description?.trim() || '',
             toothNumber: t.toothNumber?.trim() || '',
             cost: parseFloat(t.cost) || 0,
           })),
         initialTests: tests
-          .filter((t) => t.testName.trim().length > 0)
+          .filter((t) => t.testName.trim().length > 0 || (parseFloat(t.cost) || 0) > 0)
           .map((t) => ({
-            testName: t.testName.trim(),
+            testName: t.testName.trim() || 'Diagnostic Test / X-Ray',
             category: t.category || 'Dental X-ray',
             description: t.description?.trim() || '',
             cost: parseFloat(t.cost) || 0,

@@ -117,39 +117,42 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   return (
     <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between h-16 items-center gap-3">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2 sm:py-0">
+        <div className="flex flex-wrap sm:flex-nowrap justify-between sm:h-16 items-center gap-2 sm:gap-3">
           {/* Logo and Brand - Click to Return to Landing Page / Dashboard */}
           <div
             onClick={onNavigateHome}
-            className="flex items-center gap-3 shrink-0 cursor-pointer group hover:opacity-90 transition-opacity"
-            title="Go to Landing Page / Dashboard"
+            className="flex items-center gap-2.5 sm:gap-3 shrink-0 cursor-pointer group hover:opacity-90 transition-opacity"
+            title="Go to Dental Care Dashboard"
           >
-            <div className="w-10 h-10 rounded-lg bg-teal-600 flex items-center justify-center text-white shadow-xs group-hover:scale-105 transition-transform">
-              <Activity className="w-6 h-6" />
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-teal-600 flex items-center justify-center text-white shadow-xs group-hover:scale-105 transition-transform">
+              <Activity className="w-5 h-5 sm:w-6 sm:h-6" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-slate-900 text-base sm:text-lg tracking-tight group-hover:text-teal-700 transition-colors">
-                  Dental Patient Tracking
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <span className="font-bold text-slate-900 text-sm sm:text-lg tracking-tight group-hover:text-teal-700 transition-colors whitespace-nowrap">
+                  Dental Care
                 </span>
-                <span className="bg-teal-50 text-teal-700 text-[10px] sm:text-[11px] font-semibold px-2 py-0.5 rounded border border-teal-200">
-                  V1.0 • BDT ৳
+                <span className="hidden xs:inline-block text-teal-700 text-[10px] sm:text-[11px] font-semibold">
+                  · BDT ৳
                 </span>
               </div>
-              <p className="text-xs text-slate-500 font-medium hidden lg:block">
-                Centralized Clinic-Wide Multi-Doctor Tracking System
+              <p className="text-[11px] text-slate-500 font-medium hidden lg:block">
+                Centralized Clinic-Wide Patient &amp; Multi-Doctor System · Lead Dev: Aymon
               </p>
             </div>
           </div>
 
-          {/* Unified Patient Search Header (Search by Name, ID, Phone) */}
-          <div ref={searchContainerRef} className="relative flex-1 max-w-lg mx-2 sm:mx-4">
+          {/* Unified Patient Search Header (Search by Name, ID, Phone) - Full width row on mobile, center column on desktop */}
+          <div
+            ref={searchContainerRef}
+            className="relative order-3 sm:order-2 w-full sm:w-auto sm:flex-1 max-w-lg sm:mx-4 mt-1.5 sm:mt-0"
+          >
             <div className="relative">
               <Search className="w-4 h-4 text-teal-600 absolute left-3 top-2.5" />
               <input
                 type="text"
-                placeholder="Unified Search: Name, Patient ID (DP-1001), or Phone (017...)..."
+                placeholder="Search Name, ID (DP-1001), or Phone (017...)..."
                 value={searchQuery}
                 onFocus={() => {
                   if (searchQuery.trim()) setShowSearchDropdown(true);
@@ -160,10 +163,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                     handleSelectPatientResult(searchResults[0].id);
                   }
                 }}
-                className="w-full pl-9 pr-28 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500 bg-slate-50 focus:bg-white transition-all shadow-2xs"
+                className="w-full pl-9 pr-8 sm:pr-28 py-2 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500 bg-slate-50 focus:bg-white transition-all shadow-2xs"
               />
               {!searchQuery ? (
-                <div className="hidden sm:flex items-center gap-1 absolute right-2.5 top-2 pointer-events-none">
+                <div className="hidden md:flex items-center gap-1 absolute right-2.5 top-2 pointer-events-none">
                   <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-200/80 text-slate-600">
                     Name
                   </span>
@@ -302,7 +305,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           {/* Quick Doctor Switcher & User Profile */}
-          <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0 order-2 sm:order-3">
             {/* Quick Doctor Switcher Button */}
             <div className="relative">
               <button

@@ -166,7 +166,13 @@ export const PatientsPage: React.FC<PatientsPageProps> = ({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => api.downloadCsv('/api/export/patients.csv', 'dental_patients.csv')}
+            onClick={() => {
+              const params = new URLSearchParams();
+              if (fromDate.trim()) params.set('fromDate', fromDate.trim());
+              if (toDate.trim()) params.set('toDate', toDate.trim());
+              const qs = params.toString() ? `?${params.toString()}` : '';
+              api.downloadCsv(`/api/export/patients.csv${qs}`, 'dental_patients.csv');
+            }}
             className="px-3 py-2 text-xs font-semibold rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
@@ -380,9 +386,9 @@ export const PatientsPage: React.FC<PatientsPageProps> = ({
                 </th>
                 <th className="py-3 px-4">Doctors Seen</th>
                 <th className="py-3 px-4">Registration / Last Visit</th>
-                <th className="py-3 px-4 text-right">Total Expenses</th>
-                <th className="py-3 px-4 text-right">Amount Paid</th>
-                <th className="py-3 px-4 text-right">Outstanding Due</th>
+                <th className="py-3 px-4 text-right">Total Patient Cost</th>
+                <th className="py-3 px-4 text-right">Payment Received</th>
+                <th className="py-3 px-4 text-right">Due</th>
                 <th className="py-3 px-4 text-center w-64 min-w-[240px]">Actions</th>
               </tr>
             </thead>
@@ -458,7 +464,13 @@ export const PatientsPage: React.FC<PatientsPageProps> = ({
                         <div className="text-[10px] text-slate-400">Reg: {p.registrationDate}</div>
                       </td>
                       <td className="py-3.5 px-4 text-right font-bold text-slate-900 whitespace-nowrap">
-                        ৳{(p.totalExpenses || 0).toLocaleString()}
+                        <div>৳{(p.totalExpenses || 0).toLocaleString()}</div>
+                        <div className="text-[10px] font-medium text-slate-500">
+                          Tx: ৳{(p.totalTreatmentExpenses || 0).toLocaleString()}
+                          {(p.totalTestExpenses || 0) > 0
+                            ? ` • Tests: ৳${(p.totalTestExpenses || 0).toLocaleString()}`
+                            : ''}
+                        </div>
                       </td>
                       <td className="py-3.5 px-4 text-right font-semibold text-emerald-700 whitespace-nowrap">
                         ৳{(p.totalPaid || 0).toLocaleString()}

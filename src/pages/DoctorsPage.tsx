@@ -3,7 +3,6 @@ import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
 import { User } from '../types/index.ts';
 import {
-  UserCheck,
   Plus,
   Shield,
   Code,
@@ -11,8 +10,7 @@ import {
   Power,
   KeyRound,
   Edit2,
-  CalendarCheck,
-  Users,
+  AlertCircle,
 } from 'lucide-react';
 
 interface DoctorsPageProps {
@@ -26,6 +24,9 @@ export const DoctorsPage: React.FC<DoctorsPageProps> = ({ onOpenDoctorModal }) =
   const [resetModalDoc, setResetModalDoc] = useState<User | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [resetSuccess, setResetSuccess] = useState<string | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmToggleDoc, setConfirmToggleDoc] = useState<User | null>(null);
 
   useEffect(() => {
     fetchDoctors();
@@ -44,26 +45,31 @@ export const DoctorsPage: React.FC<DoctorsPageProps> = ({ onOpenDoctorModal }) =
   };
 
   const handleToggleStatus = async (doc: User) => {
+    setActionError(null);
     if (doc.id === user?.id) {
-      alert('You cannot deactivate your own account.');
+      setActionError('You cannot deactivate your own account.');
       return;
     }
-    const confirm = window.confirm(
-      `Are you sure you want to ${doc.isActive ? 'deactivate' : 'activate'} ${doc.fullName}'s account?`
-    );
-    if (!confirm) return;
+    setConfirmToggleDoc(doc);
+  };
 
+  const confirmToggleAccountStatus = async () => {
+    if (!confirmToggleDoc) return;
+    setActionError(null);
     try {
-      await api.toggleDoctorStatus(doc.id);
+      await api.toggleDoctorStatus(confirmToggleDoc.id);
+      setConfirmToggleDoc(null);
       fetchDoctors();
     } catch (e: any) {
-      alert(e.message || 'Failed to toggle status');
+      setActionError(e.message || 'Failed to toggle status');
+      setConfirmToggleDoc(null);
     }
   };
 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!resetModalDoc || !newPassword) return;
+    setResetError(null);
     try {
       await api.resetDoctorPassword(resetModalDoc.id, newPassword);
       setResetSuccess(`Password updated for ${resetModalDoc.fullName}`);
@@ -73,7 +79,7 @@ export const DoctorsPage: React.FC<DoctorsPageProps> = ({ onOpenDoctorModal }) =
         setResetSuccess(null);
       }, 1500);
     } catch (e: any) {
-      alert(e.message || 'Failed to reset password');
+      setResetError(e.message || 'Failed to reset password');
     }
   };
 
@@ -96,6 +102,13 @@ export const DoctorsPage: React.FC<DoctorsPageProps> = ({ onOpenDoctorModal }) =
           <span>Add Doctor Account</span>
         </button>
       </div>
+
+      {actionError && (
+        <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs font-semibold flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+          <span>{actionError}</span>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {loading ? (
@@ -222,6 +235,12 @@ export const DoctorsPage: React.FC<DoctorsPageProps> = ({ onOpenDoctorModal }) =
             <h3 className="font-bold text-slate-900 text-sm">
               Reset Password for {resetModalDoc.fullName}
             </h3>
+            {resetError && (
+              <div className="p-2.5 bg-red-50 border border-red-200 text-red-700 rounded flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{resetError}</span>
+              </div>
+            )}
             {resetSuccess ? (
               <div className="p-3 bg-emerald-50 text-emerald-800 rounded font-semibold text-center">
                 {resetSuccess}
@@ -245,7 +264,10 @@ export const DoctorsPage: React.FC<DoctorsPageProps> = ({ onOpenDoctorModal }) =
                 <div className="flex justify-end gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={() => setResetModalDoc(null)}
+                    onClick={() => {
+                      setResetModalDoc(null);
+                      setResetError(null);
+                    }}
                     className="px-3 py-1.5 text-slate-600 border border-slate-300 rounded cursor-pointer"
                   >
                     Cancel
@@ -259,6 +281,41 @@ export const DoctorsPage: React.FC<DoctorsPageProps> = ({ onOpenDoctorModal }) =
                 </div>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Account Activation / Deactivation Modal */}
+      {confirmToggleDoc && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl border border-slate-200 max-w-sm w-full p-5 space-y-4 text-xs">
+            <h3 className="font-bold text-slate-900 text-sm">
+              {confirmToggleDoc.isActive ? 'Deactivate Account' : 'Activate Account'}
+            </h3>
+            <p className="text-slate-600 leading-relaxed">
+              Are you sure you want to {confirmToggleDoc.isActive ? 'deactivate' : 'activate'}{' '}
+              <strong className="text-slate-900">{confirmToggleDoc.fullName}</strong>&apos;s account?
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmToggleDoc(null)}
+                className="px-3 py-1.5 text-slate-600 border border-slate-300 rounded cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmToggleAccountStatus}
+                className={`px-3 py-1.5 text-white rounded font-semibold cursor-pointer ${
+                  confirmToggleDoc.isActive
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : 'bg-emerald-600 hover:bg-emerald-700'
+                }`}
+              >
+                {confirmToggleDoc.isActive ? 'Deactivate' : 'Activate'}
+              </button>
+            </div>
           </div>
         </div>
       )}

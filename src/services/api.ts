@@ -9,6 +9,20 @@ import {
   Appointment,
   AuditLog,
   DashboardStats,
+  ApplicationFeatureFlag,
+  Prescription,
+  PrescriptionMedicineSuggestion,
+  CatalogMedicine,
+  MedicineSearchResponse,
+  MedicineOverviewStats,
+  MedicineImportMode,
+  MedicineColumnMapping,
+  MedicineImportPreviewResponse,
+  MedicineImportBatch,
+  MedicineCatalogSnapshot,
+  MedicineAuditLog,
+  MedicineDetailResponse,
+  DoctorClinicalHeading,
 } from '../types/index.ts';
 
 const TOKEN_KEY = 'dental_clinic_auth_token';
@@ -36,20 +50,29 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     headers['Authorization'] = `Bearer ${token}`;
   }
 
+  const method = (options.method || 'GET').toUpperCase();
   const response = await fetch(endpoint, {
     ...options,
     headers,
+    ...(method === 'GET' ? { cache: 'no-store' as RequestCache } : {}),
   });
 
   if (!response.ok) {
     let errorMsg = 'An error occurred';
+    let errorCode: string | undefined;
     try {
       const errorData = await response.json();
       errorMsg = errorData.error || errorMsg;
+      errorCode = errorData.code;
     } catch {
       errorMsg = response.statusText || errorMsg;
     }
-    throw new Error(errorMsg);
+    if (errorCode === 'FEATURE_DISABLED' && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('prescription-feature-disabled', { detail: errorMsg }));
+    }
+    const err: any = new Error(errorMsg);
+    if (errorCode) err.code = errorCode;
+    throw err;
   }
 
   return response.json();
@@ -278,14 +301,67 @@ export const api = {
     return request<Payment[]>(`/api/payments?${q.toString()}`);
   },
 
-  // Appointments / Follow-ups
-  getAppointments: (params: { status?: string; doctorId?: number; upcomingOnly?: boolean } = {}) => {
+  getPaymentDues: (params: {
+    doctorId?: number | string;
+    fromDate?: string;
+    toDate?: string;
+    search?: string;
+  } = {}) => {
+    const q = new URLSearchParams();
+    if (params.doctorId && params.doctorId !== 'All') q.append('doctorId', params.doctorId.toString());
+    if (params.fromDate) q.append('fromDate', params.fromDate);
+    if (params.toDate) q.append('toDate', params.toDate);
+    if (params.search) q.append('search', params.search);
+    return request<Visit[]>(`/api/payments/dues?${q.toString()}`);
+  },
+
+  // Appointments / Follow-ups & Central SMS Reminders
+  getAppointments: (params: { status?: string; doctorId?: number; upcomingOnly?: boolean; followUpDate?: string } = {}) => {
     const q = new URLSearchParams();
     if (params.status && params.status !== 'All') q.append('status', params.status);
     if (params.doctorId) q.append('doctorId', params.doctorId.toString());
     if (params.upcomingOnly) q.append('upcomingOnly', 'true');
+    if (params.followUpDate) q.append('followUpDate', params.followUpDate);
     return request<Appointment[]>(`/api/appointments?${q.toString()}`);
   },
+
+  getSmsReminderLogs: () =>
+    request<{
+      logs: any[];
+      clinicName: string;
+      clinicPhone: string;
+      smsTemplate: string;
+      smsGatewayUrl: string;
+      smsGatewayApiKey?: string;
+      defaultMessagingChannel?: string;
+    }>('/api/appointments/sms-logs'),
+
+  testSmsGateway: (gatewayUrl: string, gatewayApiKey?: string) =>
+    request<{
+      success: boolean;
+      statusCode?: number;
+      message: string;
+    }>('/api/appointments/test-sms-gateway', {
+      method: 'POST',
+      body: JSON.stringify({ gatewayUrl, gatewayApiKey }),
+    }),
+
+  sendSmsReminders: (data: {
+    appointmentIds: number[];
+    messageTemplate?: string;
+    gatewayUrl?: string;
+    gatewayApiKey?: string;
+    channel?: string;
+  }) =>
+    request<{
+      success: boolean;
+      channel?: string;
+      sentCount: number;
+      results: any[];
+    }>('/api/appointments/send-sms-reminders', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   createAppointment: (data: Partial<Appointment>) =>
     request<Appointment>('/api/appointments', {
@@ -320,8 +396,15 @@ export const api = {
     const headers: Record<string, string> = {};
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
-    const res = await fetch(endpoint, { headers });
-    if (!res.ok) throw new Error('Failed to download CSV');
+    const res = await fetch(endpoint, { headers, cache: 'no-store' });
+    if (!res.ok) {
+      let msg = 'Failed to download CSV';
+      try {
+        const errData = await res.json();
+        msg = errData.error || msg;
+      } catch {}
+      throw new Error(msg);
+    }
 
     const blob = await res.blob();
     const url = window.URL.createObjectURL(blob);
@@ -353,4 +436,225 @@ export const api = {
     a.remove();
     window.URL.revokeObjectURL(url);
   },
+
+  // Application Feature Flags (Developer Controlled)
+  getFeatures: () =>
+    request<{ prescriptionManagement: boolean; flags: ApplicationFeatureFlag[] }>('/api/features'),
+
+  toggleFeature: (key: string, isEnabled: boolean) =>
+    request<{ success: boolean; flag: ApplicationFeatureFlag; prescriptionManagement: boolean }>(
+      `/api/developer/features/${key}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ isEnabled }),
+      }
+    ),
+
+  // Prescription Management Module
+  getPrescriptions: (params: {
+    patientId?: number;
+    visitId?: number;
+    doctorId?: number | string;
+    status?: string;
+    fromDate?: string;
+    toDate?: string;
+    search?: string;
+  } = {}) => {
+    const q = new URLSearchParams();
+    if (params.patientId) q.append('patientId', params.patientId.toString());
+    if (params.visitId) q.append('visitId', params.visitId.toString());
+    if (params.doctorId && params.doctorId !== 'All') q.append('doctorId', params.doctorId.toString());
+    if (params.status && params.status !== 'All') q.append('status', params.status);
+    if (params.fromDate) q.append('fromDate', params.fromDate);
+    if (params.toDate) q.append('toDate', params.toDate);
+    if (params.search) q.append('search', params.search);
+    return request<Prescription[]>(`/api/prescriptions?${q.toString()}`);
+  },
+
+  getPrescription: (id: number) => request<Prescription>(`/api/prescriptions/${id}`),
+
+  getMedicineSuggestions: (q: string = '') =>
+    request<PrescriptionMedicineSuggestion[]>(
+      `/api/prescriptions/medicines/suggestions?q=${encodeURIComponent(q)}`
+    ),
+
+  getDoctorClinicalHeadings: (doctorId?: number) => {
+    const q = doctorId ? `?doctorId=${doctorId}` : '';
+    return request<DoctorClinicalHeading[]>(`/api/prescriptions/headings${q}`);
+  },
+
+  saveDoctorClinicalHeadings: (headings: DoctorClinicalHeading[], doctorId?: number) =>
+    request<{ success: boolean; headings: DoctorClinicalHeading[] }>('/api/prescriptions/headings', {
+      method: 'PUT',
+      body: JSON.stringify({ headings, doctorId }),
+    }),
+
+  createPrescription: (data: any) =>
+    request<Prescription>('/api/prescriptions', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updatePrescription: (id: number, data: any) =>
+    request<Prescription>(`/api/prescriptions/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  finalizePrescription: (id: number) =>
+    request<Prescription>(`/api/prescriptions/${id}/finalize`, {
+      method: 'POST',
+    }),
+
+  revisePrescription: (id: number, revisionReason?: string) =>
+    request<Prescription>(`/api/prescriptions/${id}/revise`, {
+      method: 'POST',
+      body: JSON.stringify({ revisionReason }),
+    }),
+
+  clonePrescription: (id: number, visitId?: number) =>
+    request<Prescription>(`/api/prescriptions/${id}/clone`, {
+      method: 'POST',
+      body: JSON.stringify({ visitId }),
+    }),
+
+  deletePrescription: (id: number) =>
+    request<{ success: boolean }>(`/api/prescriptions/${id}`, {
+      method: 'DELETE',
+    }),
+
+  logPrescriptionExport: (id: number, mode: 'pdf' | 'print') =>
+    request<{ success: boolean }>(`/api/prescriptions/${id}/log-export`, {
+      method: 'POST',
+      body: JSON.stringify({ mode }),
+    }),
+
+  // Local Bangladesh Medicine Catalog (Smart Autocomplete & Admin Management)
+  searchMedicines: (q: string, limit: number = 10, offset: number = 0) => {
+    const params = new URLSearchParams({
+      q,
+      limit: String(limit),
+      offset: String(offset),
+    });
+    return request<MedicineSearchResponse>(`/api/medicines/search?${params.toString()}`);
+  },
+
+  getMedicineOverview: () => request<MedicineOverviewStats>('/api/medicines/admin/overview'),
+
+  getMedicineCatalog: (
+    params: {
+      q?: string;
+      status?: 'all' | 'active' | 'inactive';
+      dosageType?: string;
+      source?: string;
+      page?: number;
+      pageSize?: number;
+    } = {}
+  ) => {
+    const q = new URLSearchParams();
+    if (params.q) q.append('q', params.q);
+    if (params.status) q.append('status', params.status);
+    if (params.dosageType && params.dosageType !== 'all') q.append('dosageType', params.dosageType);
+    if (params.source && params.source !== 'all') q.append('source', params.source);
+    if (params.page) q.append('page', String(params.page));
+    if (params.pageSize) q.append('pageSize', String(params.pageSize));
+    return request<{
+      items: CatalogMedicine[];
+      total: number;
+      page: number;
+      pageSize: number;
+      facets: { dosageTypes: string[]; sources: string[] };
+    }>(`/api/medicines/admin/catalog?${q.toString()}`);
+  },
+
+  getMedicineDetail: (id: number) =>
+    request<MedicineDetailResponse>(`/api/medicines/admin/${id}`),
+
+  createCatalogMedicine: (data: {
+    brandName: string;
+    genericName: string;
+    packageMark?: string;
+    dosageType: string;
+    strength?: string;
+    manufacturer: string;
+    isActive?: boolean;
+  }) =>
+    request<CatalogMedicine>('/api/medicines/admin', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updateCatalogMedicine: (
+    id: number,
+    data: Partial<{
+      brandName: string;
+      genericName: string;
+      packageMark: string;
+      dosageType: string;
+      strength: string;
+      manufacturer: string;
+      isActive: boolean;
+    }>
+  ) =>
+    request<CatalogMedicine>(`/api/medicines/admin/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  toggleCatalogMedicineStatus: (id: number, isActive: boolean) =>
+    request<CatalogMedicine>(`/api/medicines/admin/${id}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ isActive }),
+    }),
+
+  previewMedicineCsvImport: (data: {
+    csvText: string;
+    importMode: MedicineImportMode;
+    columnMapping?: Partial<MedicineColumnMapping>;
+  }) =>
+    request<MedicineImportPreviewResponse>('/api/medicines/admin/import/preview', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  commitMedicineCsvImport: (data: {
+    csvText: string;
+    filename: string;
+    sourceLabel: string;
+    importMode: MedicineImportMode;
+    columnMapping?: Partial<MedicineColumnMapping>;
+    deactivateMissingIds?: number[];
+  }) =>
+    request<{
+      success: boolean;
+      batch: MedicineImportBatch;
+      snapshot: { id: number; snapshotCode: string; label: string };
+    }>('/api/medicines/admin/import/commit', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  getMedicineHistory: () =>
+    request<{
+      batches: MedicineImportBatch[];
+      snapshots: MedicineCatalogSnapshot[];
+      logs: MedicineAuditLog[];
+    }>('/api/medicines/admin/history'),
+
+  createMedicineSnapshot: (label?: string) =>
+    request<MedicineCatalogSnapshot>('/api/medicines/admin/snapshots', {
+      method: 'POST',
+      body: JSON.stringify({ label }),
+    }),
+
+  rollbackMedicineCatalog: (snapshotId: number) =>
+    request<{
+      success: boolean;
+      restoredCount: number;
+      snapshotCode: string;
+      safetySnapshotCode: string;
+    }>(`/api/medicines/admin/rollback/${snapshotId}`, {
+      method: 'POST',
+    }),
 };
+

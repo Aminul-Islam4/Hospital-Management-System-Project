@@ -10,8 +10,13 @@ import {
   appointments,
   auditLogs,
   systemSettings,
+  applicationFeatureFlags,
+  prescriptions,
+  prescriptionMedicines,
+  prescriptionAuditLogs,
 } from './schema.ts';
-import { count, eq, inArray, asc } from 'drizzle-orm';
+import { ensureMedicineCatalogSeeded } from '../server/medicines.ts';
+import { count, eq, inArray, asc, isNull, and } from 'drizzle-orm';
 
 async function reconcileExistingPatientBalances() {
   try {
@@ -45,8 +50,254 @@ async function reconcileExistingPatientBalances() {
   }
 }
 
+async function ensureTomorrowFollowUpsAndBranding() {
+  try {
+    await db
+      .update(users)
+      .set({
+        fullName: 'Aymon (Lead Developer)',
+        email: 'aymon@dentalcare.com',
+      })
+      .where(eq(users.username, 'dev_admin'));
+
+    // Migrate old seeded user emails to @dentalcare.com if still using @nasirdentalcare.com
+    const emailMigrations = [
+      { username: 'maindoctor', email: 'dr.rahman@dentalcare.com' },
+      { username: 'dr_rahim', email: 'dr.rahim@dentalcare.com' },
+      { username: 'dr_fatima', email: 'dr.fatima@dentalcare.com' },
+      { username: 'dr_tariq', email: 'dr.tariq@dentalcare.com' },
+    ];
+    for (const m of emailMigrations) {
+      await db.update(users).set({ email: m.email }).where(eq(users.username, m.username));
+    }
+
+    const existingClinicSetting = await db
+      .select()
+      .from(systemSettings)
+      .where(eq(systemSettings.key, 'clinic_name'));
+
+    if (existingClinicSetting.length > 0) {
+      if (
+        existingClinicSetting[0].value.includes('Dhaka Dental') ||
+        existingClinicSetting[0].value.includes('Nasir Dental Care') ||
+        existingClinicSetting[0].value === 'Dental Patient Tracking'
+      ) {
+        await db
+          .update(systemSettings)
+          .set({ value: 'Dental Care', updatedAt: new Date() })
+          .where(eq(systemSettings.key, 'clinic_name'));
+      }
+    } else {
+      await db.insert(systemSettings).values({
+        key: 'clinic_name',
+        value: 'Dental Care',
+        description: 'Name of the dental clinic',
+      });
+    }
+
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+
+    const existingAppointments = await db.select().from(appointments);
+    const hasTomorrowScheduled = existingAppointments.some(
+      (a) => a.followUpDate === tomorrowStr && a.status === 'Scheduled'
+    );
+
+    if (!hasTomorrowScheduled) {
+      const allPatients = await db.select().from(patients).orderBy(asc(patients.id));
+      const allDoctors = await db
+        .select()
+        .from(users)
+        .where(eq(users.role, 'doctor'))
+        .orderBy(asc(users.id));
+
+      if (allPatients.length >= 1 && allDoctors.length >= 1) {
+        const scheduledApps = existingAppointments.filter((a) => a.status === 'Scheduled');
+        if (scheduledApps.length > 0) {
+          await db
+            .update(appointments)
+            .set({ followUpDate: tomorrowStr })
+            .where(eq(appointments.id, scheduledApps[0].id));
+        } else {
+          await db.insert(appointments).values({
+            patientId: allPatients[0].id,
+            doctorId: allDoctors[0].id,
+            followUpDate: tomorrowStr,
+            reason: 'Permanent Zirconia Crown Trial & Bite Evaluation',
+            status: 'Scheduled',
+            notes: 'Verify occlusion and margins prior to final cementation.',
+          });
+        }
+
+        if (allPatients.length >= 2) {
+          const secondPatient = allPatients[1];
+          const secondDoctor = allDoctors[1] || allDoctors[0];
+          const alreadyHasSecond = existingAppointments.some(
+            (a) => a.patientId === secondPatient.id && a.status === 'Scheduled'
+          );
+          if (!alreadyHasSecond) {
+            await db.insert(appointments).values({
+              patientId: secondPatient.id,
+              doctorId: secondDoctor.id,
+              followUpDate: tomorrowStr,
+              reason: 'Post-Scaling Gingival Healing & Periodontal Review',
+              status: 'Scheduled',
+              notes: 'Check gingival inflammation and oral hygiene compliance.',
+            });
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Error syncing branding and tomorrow follow-ups:', e);
+  }
+}
+
+async function ensurePrescriptionModuleBootstrap() {
+  try {
+    // Idempotently insert 'prescription_management' feature flag if it does not yet exist
+    // Preserves developer ON/OFF preference across restarts via onConflictDoNothing
+    await db
+      .insert(applicationFeatureFlags)
+      .values({
+        featureKey: 'prescription_management',
+        featureName: 'Prescription Management',
+        description:
+          'Controls access to digital dental prescriptions, dynamic medicine entries, patient prescription history, revision workflows, and A4 PDF generation across all doctor portals.',
+        isEnabled: true,
+      })
+      .onConflictDoNothing({ target: applicationFeatureFlags.featureKey });
+
+    // Populate clinic doctor BMDC registration numbers if null
+    const regMigrations = [
+      { username: 'maindoctor', reg: 'BMDC Reg: A-28410' },
+      { username: 'dr_rahim', reg: 'BMDC Reg: A-51904' },
+      { username: 'dr_fatima', reg: 'BMDC Reg: A-60312' },
+      { username: 'dr_tariq', reg: 'BMDC Reg: A-64891' },
+    ];
+    for (const r of regMigrations) {
+      await db
+        .update(users)
+        .set({ registrationNumber: r.reg })
+        .where(andNullCheck(r.username));
+    }
+
+    // One-time demo prescription seed only if never seeded before and DP-1001/VST-1002 exist
+    const seededCheck = await db
+      .select()
+      .from(systemSettings)
+      .where(eq(systemSettings.key, 'prescription_demo_seeded'));
+
+    if (seededCheck.length === 0) {
+      const existingRxCount = await db.select({ count: count() }).from(prescriptions);
+      if (Number(existingRxCount[0]?.count || 0) === 0) {
+        const [pat1] = await db.select().from(patients).where(eq(patients.patientId, 'DP-1001'));
+        const [vst2] = await db.select().from(visits).where(eq(visits.visitId, 'VST-1002'));
+        const [docB] = await db.select().from(users).where(eq(users.username, 'dr_fatima'));
+
+        if (pat1 && vst2 && docB) {
+          const [rx] = await db
+            .insert(prescriptions)
+            .values({
+              prescriptionNumber: 'RX-1001',
+              patientId: pat1.id,
+              doctorId: docB.id,
+              visitId: vst2.id,
+              revisionNumber: 1,
+              status: 'Finalized',
+              prescriptionDate: vst2.visitDate,
+              chiefComplaints: vst2.complaints || 'Follow-up for Root Canal Completion (#36).',
+              clinicalFindings: 'Tooth #36 canals clean, dry, no periapical exudate, percussion mildly tender.',
+              diagnosis: vst2.diagnosis || 'Tooth #36 post-obturation RCT completion.',
+              treatmentPlan: 'Warm vertical obturation completed; composite core build-up placed. Refer for full-coverage Zirconia crown.',
+              followUpDate: vst2.nextFollowUpDate || null,
+              oralHygieneInstructions: 'Keep the treated quadrant clean; avoid sticky or hard foods on tooth #36 until final crown cementation.',
+              toothBrushingInstructions: 'Brush gently twice daily with a soft-bristled toothbrush using modified Bass technique.',
+              mouthwashRecommendations: 'Rinse with Chlorhexidine Gluconate 0.2% mouthwash (10 ml) twice daily for 7 days after brushing.',
+              postTreatmentPrecautions: 'Mild chewing tenderness for 24–48 hours is normal after obturation. Contact clinic if swelling or severe throbbing occurs.',
+              dietaryRecommendations: 'Chew on the opposite side for 48 hours; avoid cracking nuts, ice, or hard bones.',
+              additionalClinicalAdvice: 'Note: Patient has documented Penicillin allergy — non-penicillin regimen prescribed.',
+              finalizedAt: new Date(),
+              finalizedBy: docB.id,
+            })
+            .returning();
+
+          await db.insert(prescriptionMedicines).values([
+            {
+              prescriptionId: rx.id,
+              sortOrder: 1,
+              medicineName: 'Tab. Azithromycin',
+              genericName: 'Azithromycin',
+              strength: '500 mg',
+              dosage: '1 tablet',
+              frequency: '1+0+0',
+              duration: '3 days',
+              quantity: '3 tablets',
+              mealInstructions: 'After meals',
+              additionalNotes: 'Penicillin-safe antibiotic cover.',
+            },
+            {
+              prescriptionId: rx.id,
+              sortOrder: 2,
+              medicineName: 'Tab. Ketorolac',
+              genericName: 'Ketorolac Tromethamine',
+              strength: '10 mg',
+              dosage: '1 tablet',
+              frequency: '1+0+1',
+              duration: '3 days',
+              quantity: '6 tablets',
+              mealInstructions: 'After meals',
+              additionalNotes: 'Take only if post-obturation pain persists.',
+            },
+            {
+              prescriptionId: rx.id,
+              sortOrder: 3,
+              medicineName: 'Cap. Omeprazole',
+              genericName: 'Omeprazole',
+              strength: '20 mg',
+              dosage: '1 capsule',
+              frequency: '1+0+1',
+              duration: '5 days',
+              quantity: '10 capsules',
+              mealInstructions: 'Before meals',
+              additionalNotes: 'Gastric protection 30 mins before breakfast and dinner.',
+            },
+          ]);
+
+          await db.insert(prescriptionAuditLogs).values({
+            prescriptionId: rx.id,
+            prescriptionNumber: rx.prescriptionNumber,
+            userId: docB.id,
+            userRole: 'doctor',
+            action: 'CREATE_AND_FINALIZE_PRESCRIPTION',
+            details: `Initial clinical prescription ${rx.prescriptionNumber} finalized for ${pat1.name} (${pat1.patientId}).`,
+          });
+        }
+      }
+
+      await db
+        .insert(systemSettings)
+        .values({
+          key: 'prescription_demo_seeded',
+          value: 'true',
+          description: 'Tracks whether initial prescription sample was created',
+        })
+        .onConflictDoNothing({ target: systemSettings.key });
+    }
+  } catch (e) {
+    console.error('Error bootstrapping prescription module:', e);
+  }
+}
+
+function andNullCheck(username: string) {
+  return and(eq(users.username, username), isNull(users.registrationNumber));
+}
+
 export async function seedInitialData() {
   try {
+    const tomorrowStr = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+
     const existingUsers = await db.select({ count: count() }).from(users);
     if (Number(existingUsers[0]?.count) > 0) {
       await db
@@ -60,7 +311,39 @@ export async function seedInitialData() {
             'Chief complaint of bleeding gums during brushing.',
           ])
         );
+
+      // Ensure Lead Developer name is updated to Aymon
+      await db
+        .update(users)
+        .set({
+          fullName: 'Aymon (Lead Developer)',
+          email: 'aymon@dentalcare.com',
+        })
+        .where(eq(users.username, 'dev_admin'));
+
+      // Ensure Clinic Name is updated to Dental Care
+      await db
+        .insert(systemSettings)
+        .values({
+          key: 'clinic_name',
+          value: 'Dental Care',
+          description: 'Name of the dental clinic',
+        })
+        .onConflictDoUpdate({
+          target: systemSettings.key,
+          set: { value: 'Dental Care', updatedAt: new Date() },
+        });
+
+      // Keep sample scheduled follow-up on tomorrow's date if it was on the old static seed date '2026-11-02'
+      await db
+        .update(appointments)
+        .set({ followUpDate: tomorrowStr })
+        .where(eq(appointments.followUpDate, '2026-11-02'));
+
       await reconcileExistingPatientBalances();
+      await ensureTomorrowFollowUpsAndBranding();
+      await ensurePrescriptionModuleBootstrap();
+      await ensureMedicineCatalogSeeded();
       console.log('Database already initialized with users.');
       return;
     }
@@ -78,7 +361,7 @@ export async function seedInitialData() {
       .values({
         username: 'maindoctor',
         passwordHash: mainDoctorPass,
-        email: 'dr.rahman@dhakadentalcare.com',
+        email: 'dr.rahman@dentalcare.com',
         fullName: 'Prof. Dr. Kazi M. Rahman',
         role: 'main_doctor',
         isActive: true,
@@ -94,12 +377,12 @@ export async function seedInitialData() {
       .values({
         username: 'dev_admin',
         passwordHash: devPass,
-        email: 'developer@dhakadentalcare.com',
-        fullName: 'Farhan Ahmed (Lead Developer)',
+        email: 'aymon@dentalcare.com',
+        fullName: 'Aymon (Lead Developer)',
         role: 'developer',
         isActive: true,
         phone: '+880 1819-987654',
-        specialization: 'Full Stack & Database Architect',
+        specialization: 'Lead Full Stack & Database Architect',
         qualifications: 'B.Sc. in Computer Science & Engineering',
         joiningDate: '2022-06-01',
       })
@@ -110,7 +393,7 @@ export async function seedInitialData() {
       .values({
         username: 'dr_rahim',
         passwordHash: doctorPass,
-        email: 'dr.rahim@dhakadentalcare.com',
+        email: 'dr.rahim@dentalcare.com',
         fullName: 'Dr. Rahim Chowdhury',
         role: 'doctor',
         isActive: true,
@@ -126,7 +409,7 @@ export async function seedInitialData() {
       .values({
         username: 'dr_fatima',
         passwordHash: doctorPass,
-        email: 'dr.fatima@dhakadentalcare.com',
+        email: 'dr.fatima@dentalcare.com',
         fullName: 'Dr. Fatima Akter',
         role: 'doctor',
         isActive: true,
@@ -142,7 +425,7 @@ export async function seedInitialData() {
       .values({
         username: 'dr_tariq',
         passwordHash: doctorPass,
-        email: 'dr.tariq@dhakadentalcare.com',
+        email: 'dr.tariq@dentalcare.com',
         fullName: 'Dr. Tariqul Islam',
         role: 'doctor',
         isActive: true,
@@ -155,7 +438,7 @@ export async function seedInitialData() {
 
     // 2. Default System Settings & Treatment Pricing
     await db.insert(systemSettings).values([
-      { key: 'clinic_name', value: 'Dhaka Dental Care & Implant Center', description: 'Name of the dental clinic' },
+      { key: 'clinic_name', value: 'Dental Care', description: 'Name of the dental clinic' },
       { key: 'clinic_address', value: 'House 42, Road 11, Banani, Dhaka-1213, Bangladesh', description: 'Clinic location' },
       { key: 'clinic_phone', value: '+880 2-9876543, +880 1711-234567', description: 'Contact phone' },
       { key: 'clinic_currency', value: 'BDT (৳)', description: 'Default currency' },
@@ -550,6 +833,8 @@ export async function seedInitialData() {
       },
     ]);
 
+    await ensurePrescriptionModuleBootstrap();
+    await ensureMedicineCatalogSeeded();
     console.log('Database seeding successfully finished!');
   } catch (error) {
     console.error('Error during database seed:', error);

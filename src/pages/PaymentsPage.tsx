@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../services/api.ts';
 import { Payment, Visit, User } from '../types/index.ts';
 import {
@@ -7,12 +8,12 @@ import {
   FileSpreadsheet,
   Stethoscope,
   CheckCircle2,
-  Tag,
   X,
   RotateCcw,
   Phone,
   Eye,
   Receipt,
+  Lock,
 } from 'lucide-react';
 import { UndoPaymentConfirmModal, UndoPaymentTarget } from '../components/UndoPaymentConfirmModal.tsx';
 
@@ -22,11 +23,16 @@ interface PaymentsPageProps {
 }
 
 export const PaymentsPage: React.FC<PaymentsPageProps> = ({ onOpenRecordPayment, onSelectPatient }) => {
+  const { user } = useAuth();
+  const canFilterAllDoctors = user?.role === 'main_doctor' || user?.role === 'developer';
+
   const [payments, setPayments] = useState<Payment[]>([]);
   const [pendingVisits, setPendingVisits] = useState<Visit[]>([]);
   const [doctors, setDoctors] = useState<User[]>([]);
   const [selectedMethod, setSelectedMethod] = useState<string>('All');
-  const [selectedCollectorId, setSelectedCollectorId] = useState<string>('All');
+  const [selectedCollectorId, setSelectedCollectorId] = useState<string>(
+    canFilterAllDoctors ? 'All' : String(user?.id || '')
+  );
   const [fromDate, setFromDate] = useState<string>('');
   const [toDate, setToDate] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -39,17 +45,34 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({ onOpenRecordPayment,
     api.getDoctors().then(setDoctors).catch(console.error);
   }, []);
 
+  // Lock collector/doctor filter to own doctor ID when not main_doctor / developer
+  useEffect(() => {
+    if (!canFilterAllDoctors && user?.id) {
+      setSelectedCollectorId(String(user.id));
+    } else if (canFilterAllDoctors) {
+      setSelectedCollectorId('All');
+    }
+  }, [canFilterAllDoctors, user?.id]);
+
+  const effectiveDoctorFilter = canFilterAllDoctors
+    ? selectedCollectorId !== 'All'
+      ? selectedCollectorId
+      : undefined
+    : user?.id
+    ? String(user.id)
+    : undefined;
+
   useEffect(() => {
     fetchPayments();
     fetchPendingVisits();
-  }, [selectedMethod, selectedCollectorId, fromDate, toDate, searchTerm]);
+  }, [selectedMethod, selectedCollectorId, fromDate, toDate, searchTerm, user?.id, canFilterAllDoctors]);
 
   const fetchPayments = async () => {
     setLoading(true);
     try {
       const data = await api.getPayments({
         method: selectedMethod !== 'All' ? selectedMethod : undefined,
-        receivedBy: selectedCollectorId !== 'All' ? selectedCollectorId : undefined,
+        receivedBy: effectiveDoctorFilter,
         fromDate: fromDate.trim() || undefined,
         toDate: toDate.trim() || undefined,
         search: searchTerm.trim() || undefined,
@@ -64,23 +87,22 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({ onOpenRecordPayment,
 
   const fetchPendingVisits = async () => {
     try {
-      const data = await api.getVisits({
-        hasDue: true,
-        doctorId: selectedCollectorId !== 'All' ? parseInt(selectedCollectorId) : undefined,
+      const data = await api.getPaymentDues({
+        doctorId: effectiveDoctorFilter,
         fromDate: fromDate.trim() || undefined,
         toDate: toDate.trim() || undefined,
         search: searchTerm.trim() || undefined,
       });
       setPendingVisits(data);
     } catch (e) {
-      console.error('Failed to load pending visits:', e);
+      console.error('Failed to load pending dues:', e);
     }
   };
 
   const handleResetFilters = () => {
     setSearchTerm('');
     setSelectedMethod('All');
-    setSelectedCollectorId('All');
+    setSelectedCollectorId(canFilterAllDoctors ? 'All' : String(user?.id || ''));
     setFromDate('');
     setToDate('');
   };
@@ -101,7 +123,7 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({ onOpenRecordPayment,
   const hasActiveFilters =
     Boolean(searchTerm.trim()) ||
     selectedMethod !== 'All' ||
-    selectedCollectorId !== 'All' ||
+    (canFilterAllDoctors && selectedCollectorId !== 'All') ||
     Boolean(fromDate) ||
     Boolean(toDate);
 
@@ -136,22 +158,38 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({ onOpenRecordPayment,
     <div className="space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Receipt className="w-5 h-5 text-teal-600" />
-            <h1 className="text-xl font-bold text-slate-900">Professional Payment &amp; Dues History</h1>
-            <span className="text-xs font-semibold px-2.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
-              Multi-Doctor Collection Ledger
+            <h1 className="text-xl font-bold text-slate-900">Payment &amp; Dues History</h1>
+            <span
+              className={`text-xs font-semibold px-2.5 py-0.5 rounded border ${
+                canFilterAllDoctors
+                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                  : 'bg-indigo-100 text-indigo-800 border-indigo-200'
+              }`}
+            >
+              {canFilterAllDoctors ? 'All-Doctor Collection Ledger' : 'My Collections & Dues Only'}
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Complete installment payment tracking, collector doctor attribution, mobile banking references (bKash/Nagad), and outstanding dues.
+            {canFilterAllDoctors
+              ? 'Full clinic-wide installment tracking, per-doctor collector filtering, mobile banking references, and outstanding dues.'
+              : `Scoped to ${user?.fullName || 'your account'}: you can view and filter only your own collected payments and pending patient dues.`}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => api.downloadCsv('/api/export/payments.csv', 'dental_payments.csv')}
+            onClick={() => {
+              const params = new URLSearchParams();
+              if (fromDate.trim()) params.set('fromDate', fromDate.trim());
+              if (toDate.trim()) params.set('toDate', toDate.trim());
+              if (selectedMethod !== 'All') params.set('method', selectedMethod);
+              if (effectiveDoctorFilter) params.set('receivedBy', effectiveDoctorFilter);
+              const qs = params.toString() ? `?${params.toString()}` : '';
+              api.downloadCsv(`/api/export/payments.csv${qs}`, 'dental_payments.csv');
+            }}
             className="px-3 py-2 text-xs font-semibold rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
@@ -274,18 +312,28 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({ onOpenRecordPayment,
             <label className="block text-[11px] font-semibold text-slate-600 mb-1">
               {activeView === 'ledger' ? 'Collected By Doctor' : 'Attending Doctor'}
             </label>
-            <select
-              value={selectedCollectorId}
-              onChange={(e) => setSelectedCollectorId(e.target.value)}
-              className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-teal-500"
-            >
-              <option value="All">All Clinic Doctors</option>
-              {doctors.map((d) => (
-                <option key={d.id} value={String(d.id)}>
-                  {d.fullName}
-                </option>
-              ))}
-            </select>
+            {canFilterAllDoctors ? (
+              <select
+                value={selectedCollectorId}
+                onChange={(e) => setSelectedCollectorId(e.target.value)}
+                className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-teal-500"
+              >
+                <option value="All">All Clinic Doctors</option>
+                {doctors.map((d) => (
+                  <option key={d.id} value={String(d.id)}>
+                    {d.fullName}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div
+                className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 bg-slate-100 text-slate-700 font-semibold flex items-center justify-between gap-2"
+                title="Only the Main Doctor can filter other doctors' collections and dues"
+              >
+                <span className="truncate">{user?.fullName || 'My Account'} (Own Only)</span>
+                <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              </div>
+            )}
           </div>
 
           {/* Date From */}
@@ -351,10 +399,14 @@ export const PaymentsPage: React.FC<PaymentsPageProps> = ({ onOpenRecordPayment,
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-xs text-amber-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <span className="font-bold text-sm text-amber-900 block">
-                Unsettled Clinic Visits Awaiting Payment ({pendingVisits.length})
+                {canFilterAllDoctors
+                  ? `Unsettled Clinic Visits Awaiting Payment (${pendingVisits.length})`
+                  : `My Unsettled Visits Awaiting Payment (${pendingVisits.length})`}
               </span>
               <p className="text-amber-800 mt-0.5">
-                Any doctor can collect full balance or record a partial installment directly with 1-click.
+                {canFilterAllDoctors
+                  ? 'Main Doctor view: filter by any doctor or collect full/partial installments directly with 1-click.'
+                  : 'Showing pending patient dues from visits attended by you. Click Record Payment to collect full or partial installments.'}
               </p>
             </div>
             <span className="font-black text-base text-amber-900 bg-white px-3 py-1.5 rounded-lg border border-amber-300 shadow-2xs self-start sm:self-auto">
