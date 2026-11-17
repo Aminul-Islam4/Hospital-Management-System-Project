@@ -81,13 +81,11 @@ const emptyMedicine = (): PrescriptionMedicine => ({
 const FREQUENCY_HELPERS = ['1+0+1', '1+1+1', '1+0+0', '0+0+1', 'দিনে ৩ বার', 'দিনে ২ বার', 'প্রয়োজনে'];
 
 const MEAL_OPTIONS = [
-  'After meals',
-  'Before meals',
-  'With food',
-  'At bedtime',
-  'খাবারের পরে',
-  'খাবারের ৩০ মিনিট আগে',
-  'ঘুমানোর আগে',
+  'Before meal',
+  'After Meal',
+  'খাবার আগে',
+  'খাবার পরে',
+  'খাবার ৩০ মিনিট আগে',
 ];
 
 const QUICK_TREATMENT_PLAN_PRESETS = [
@@ -210,7 +208,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
   const [treatmentPlanItems, setTreatmentPlanItems] = useState<PrescriptionTreatmentPlanItem[]>([]);
   const [advisedTests, setAdvisedTests] = useState<PrescriptionAdvisedTestItem[]>([]);
   const [showPlanCosts, setShowPlanCosts] = useState<boolean>(true);
-  const [showOptionalSections, setShowOptionalSections] = useState<boolean>(false);
+  const [showOptionalSections, setShowOptionalSections] = useState<boolean>(true);
 
   // Personalized Doctor Clinical Headings (History, On Examinations, Investigations, etc.)
   const [customSections, setCustomSections] = useState<PrescriptionCustomSection[]>([]);
@@ -237,6 +235,8 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
   const [rxFieldLang, setRxFieldLang] = useState<RxFieldLang>('bn');
   const [rowLangs, setRowLangs] = useState<Record<number, RxFieldLang>>({});
   const durationInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
+  const [openMealDropdownIdx, setOpenMealDropdownIdx] = useState<number | null>(null);
+  const mealInputRefs = useRef<Record<number, HTMLInputElement | null>>({});
 
   // Previous Prescriptions & Patient History Loader (Optional for returning patients)
   const [previousPrescriptions, setPreviousPrescriptions] = useState<Prescription[]>([]);
@@ -261,6 +261,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
     userChangedVisitRef.current = false;
     setError(null);
     setActiveMedIdx(null);
+    setOpenMealDropdownIdx(null);
     setMedResults([]);
 
     api.getSettings().then(setClinicSettings).catch(() => {});
@@ -321,7 +322,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
       setAdvisedTests(editTests);
       setShowPlanCosts(editingPrescription.showPlanCosts !== false);
       setSyncToPatientRecords(editingPrescription.syncToPatientRecords !== false);
-      setShowOptionalSections(editPlans.length > 0 || editTests.length > 0);
+      setShowOptionalSections(true);
       setPatientExistingDiseases(editingPrescription.patientExistingDiseases || '');
       setPatientAllergies(editingPrescription.patientAllergies || '');
       setPatientMedicalHistory(editingPrescription.patientMedicalHistory || '');
@@ -358,7 +359,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
       setTreatmentPlanItems([]);
       setAdvisedTests([]);
       setShowPlanCosts(true);
-      setShowOptionalSections(false);
+      setShowOptionalSections(true);
       setCustomSections([]);
       setNewHeadingInput('');
       setHeadingsNotice(null);
@@ -1428,10 +1429,13 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                 </div>
               </div>
 
-              {/* Clinical Details (English Section Labels) */}
-              <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-3">
+              {/* STEP 1: Clinical Details (English Section Labels) */}
+              <div className="p-4 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
-                  <span className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                  <span className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                    <span className="w-6 h-6 rounded-lg bg-teal-600 text-white text-xs font-extrabold flex items-center justify-center shadow-2xs">
+                      1
+                    </span>
                     <CalendarCheck className="w-4 h-4 text-teal-600" />
                     <span>Prescription &amp; Clinical Details</span>
                   </span>
@@ -2037,7 +2041,7 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                     />
                   </div>
 
-                  <div>
+                  <div className="md:col-span-2">
                     <div className="flex items-center justify-between gap-2 mb-1">
                       <label className="block font-semibold text-slate-700">Diagnosis</label>
                       {getResolvedPreviousHistory().prevDiagnosis && (
@@ -2065,63 +2069,6 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                       onChange={(e) => setDiagnosis(e.target.value)}
                       placeholder="e.g., Acute Irreversible Pulpitis #36 / Post-Extraction Socket"
                       className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500 font-medium"
-                    />
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between gap-1 mb-1">
-                      <label className="block font-semibold text-slate-700">
-                        পরবর্তী সাক্ষাতের তারিখ:
-                      </label>
-                      {followUpDate && (
-                        <span className="text-[10.5px] font-mono font-bold text-teal-800">
-                          {formatDateDDMMYYYY(followUpDate)}
-                        </span>
-                      )}
-                    </div>
-                    <input
-                      type="date"
-                      value={followUpDate}
-                      onChange={(e) => setFollowUpDate(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500"
-                    />
-                    {followUpDate && (
-                      <div className="text-[11px] font-semibold text-teal-800 mt-1">
-                        বাংলা তারিখ: {formatBanglaDate(followUpDate)} ({formatDateDDMMYYYY(followUpDate)})
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="md:col-span-2">
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      <label className="block font-semibold text-slate-700">
-                        Treatment Plan
-                      </label>
-                      {getResolvedPreviousHistory().prevTreatmentPlan && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setTreatmentPlan((prev) =>
-                              mergeTextValue(
-                                prev,
-                                getResolvedPreviousHistory().prevTreatmentPlan,
-                                prevLoadMode
-                              )
-                            )
-                          }
-                          className="text-[10.5px] font-bold text-teal-700 hover:underline flex items-center gap-1 cursor-pointer"
-                        >
-                          <History className="w-3 h-3" />
-                          <span>Load Previous Treatment Plan</span>
-                        </button>
-                      )}
-                    </div>
-                    <textarea
-                      rows={2}
-                      value={treatmentPlan}
-                      onChange={(e) => setTreatmentPlan(e.target.value)}
-                      placeholder="Planned procedures, crown preparation, scaling, or follow-up stages..."
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500"
                     />
                   </div>
                 </div>
@@ -2301,15 +2248,445 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                 </div>
               </div>
 
-              {/* DYNAMIC MEDICINES WITH SMART LOCAL CATALOG AUTOCOMPLETE (NO QUANTITY FIELD!) */}
-              <div className="p-4 rounded-xl border border-teal-200 bg-teal-50/30 space-y-3">
+              {/* STEP 2: TREATMENT PLAN & ADVISED TESTS (BEFORE PRESCRIBED MEDICATIONS IN EDITOR, SHOWN AFTER MEDICINES ON FINAL RX) */}
+              <div className="p-4 rounded-xl border border-cyan-200/80 bg-gradient-to-br from-slate-50 via-white to-cyan-50/30 shadow-2xs space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <h3 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                    <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2 flex-wrap">
+                      <span className="w-6 h-6 rounded-lg bg-teal-600 text-white text-xs font-extrabold flex items-center justify-center shadow-2xs">
+                        2
+                      </span>
+                      <ClipboardList className="w-4 h-4 text-teal-600" />
+                      <span>Treatment Plan &amp; Advised Tests</span>
+                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200">
+                        Optional
+                      </span>
+                      {(treatmentPlanItems.length > 0 || advisedTests.length > 0) && (
+                        <span className="text-[11px] font-bold text-teal-800 bg-teal-100/70 px-2 py-0.5 rounded-md">
+                          {treatmentPlanItems.length} treatment{treatmentPlanItems.length === 1 ? '' : 's'} &bull; {advisedTests.length} test{advisedTests.length === 1 ? '' : 's'}
+                        </span>
+                      )}
+                    </h3>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Add recommended dental procedures or diagnostic tests before prescribing medicines. On the final prescription, Advised Tests appear on the left and Recommended Treatment Plan appears after Prescribed Medications.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowOptionalSections(true);
+                        setTreatmentPlanItems((prev) => [...prev, emptyTreatmentPlanItem()]);
+                      }}
+                      className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-white hover:bg-teal-50 text-teal-800 border border-teal-300 flex items-center gap-1 shadow-2xs cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Planned Treatment</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowOptionalSections(true);
+                        setAdvisedTests((prev) => [...prev, emptyAdvisedTestItem()]);
+                      }}
+                      className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-white hover:bg-cyan-50 text-cyan-800 border border-cyan-300 flex items-center gap-1 shadow-2xs cursor-pointer"
+                    >
+                      <Radio className="w-3.5 h-3.5" />
+                      <span>Add Advised Test</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowOptionalSections((v) => !v)}
+                      className="px-2.5 py-1.5 text-[11px] font-semibold rounded-lg border border-slate-200 bg-white text-slate-600 hover:text-slate-900 hover:bg-slate-50 cursor-pointer"
+                    >
+                      {showOptionalSections ? 'Collapse' : 'Expand'}
+                    </button>
+                  </div>
+                </div>
+
+                {showOptionalSections && (
+                  <div className="space-y-4 pt-2 border-t border-slate-200/80">
+                    {/* Sub-panel A: Optional Planned Treatments */}
+                    <div className="p-3.5 rounded-xl bg-white border border-teal-200/90 shadow-2xs space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-teal-900 flex items-center gap-1.5">
+                          <ClipboardList className="w-3.5 h-3.5 text-teal-600" />
+                          <span>Planned Treatments (Optional)</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setTreatmentPlanItems((prev) => [...prev, emptyTreatmentPlanItem()])
+                          }
+                          className="text-[11px] font-bold text-teal-700 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" /> Add Row
+                        </button>
+                      </div>
+
+                      {/* Quick Presets */}
+                      <div className="flex flex-wrap gap-1.5">
+                        {QUICK_TREATMENT_PLAN_PRESETS.map((pt) => (
+                          <button
+                            key={pt.treatmentName}
+                            type="button"
+                            onClick={() =>
+                              setTreatmentPlanItems((prev) => [
+                                ...prev,
+                                {
+                                  treatmentName: pt.treatmentName,
+                                  toothNumber: '',
+                                  cost: pt.cost,
+                                  notes: '',
+                                },
+                              ])
+                            }
+                            className="px-2.5 py-1 text-[11px] font-medium rounded-lg bg-slate-100 hover:bg-teal-50 hover:text-teal-800 border border-slate-200 hover:border-teal-300 text-slate-700 transition-colors cursor-pointer"
+                          >
+                            + {pt.treatmentName} (৳{Number(pt.cost).toLocaleString()})
+                          </button>
+                        ))}
+                      </div>
+
+                      {treatmentPlanItems.length === 0 ? (
+                        <div className="text-[11px] text-slate-400 italic py-1">
+                          No planned treatments added yet. Click any quick preset chip above or &ldquo;Add Row&rdquo;.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {treatmentPlanItems.map((item, idx) => (
+                            <div
+                              key={idx}
+                              className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
+                            >
+                              <div className="sm:col-span-5">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Treatment / Procedure *
+                                </label>
+                                <input
+                                  type="text"
+                                  value={item.treatmentName}
+                                  onChange={(e) =>
+                                    setTreatmentPlanItems((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, treatmentName: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="e.g., Root Canal Treatment"
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-teal-500"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-2">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Tooth # (Opt.)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={item.toothNumber || ''}
+                                  onChange={(e) =>
+                                    setTreatmentPlanItems((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, toothNumber: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="e.g., 36"
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-teal-500"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-2">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Cost ৳ (Opt.)
+                                </label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="any"
+                                  value={item.cost ?? ''}
+                                  onChange={(e) =>
+                                    setTreatmentPlanItems((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, cost: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="Optional"
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-semibold focus:ring-2 focus:ring-teal-500"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-2">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Notes (Opt.)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={item.notes || ''}
+                                  onChange={(e) =>
+                                    setTreatmentPlanItems((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, notes: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="Stage / note..."
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-teal-500"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-1 flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setTreatmentPlanItems((prev) =>
+                                      prev.filter((_, i) => i !== idx)
+                                    )
+                                  }
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                                  title="Remove Treatment Item"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Sub-panel B: Optional Advised Diagnostic Tests */}
+                    <div className="p-3.5 rounded-xl bg-white border border-cyan-200/90 shadow-2xs space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-bold text-cyan-900 flex items-center gap-1.5">
+                          <Radio className="w-3.5 h-3.5 text-cyan-600" />
+                          <span>Advised Diagnostic Tests / X-rays (Optional)</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAdvisedTests((prev) => [...prev, emptyAdvisedTestItem()])
+                          }
+                          className="text-[11px] font-bold text-cyan-700 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" /> Add Row
+                        </button>
+                      </div>
+
+                      {/* Quick Test Presets */}
+                      <div className="flex flex-wrap gap-1.5">
+                        {QUICK_ADVISED_TEST_PRESETS.map((tp) => (
+                          <button
+                            key={tp.testName}
+                            type="button"
+                            onClick={() =>
+                              setAdvisedTests((prev) => [
+                                ...prev,
+                                {
+                                  testName: tp.testName,
+                                  category: tp.category,
+                                  cost: tp.cost,
+                                  notes: '',
+                                },
+                              ])
+                            }
+                            className="px-2.5 py-1 text-[11px] font-medium rounded-lg bg-slate-100 hover:bg-cyan-50 hover:text-cyan-800 border border-slate-200 hover:border-cyan-300 text-slate-700 transition-colors cursor-pointer"
+                          >
+                            + {tp.testName}
+                            {Number(tp.cost) > 0 ? ` (৳${Number(tp.cost).toLocaleString()})` : ''}
+                          </button>
+                        ))}
+                      </div>
+
+                      {advisedTests.length === 0 ? (
+                        <div className="text-[11px] text-slate-400 italic py-1">
+                          No diagnostic tests advised yet. Click any quick preset chip above or &ldquo;Add Row&rdquo;.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {advisedTests.map((test, idx) => (
+                            <div
+                              key={idx}
+                              className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
+                            >
+                              <div className="sm:col-span-5">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Advised Test / Investigation *
+                                </label>
+                                <input
+                                  type="text"
+                                  value={test.testName}
+                                  onChange={(e) =>
+                                    setAdvisedTests((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, testName: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="e.g., Digital IOPA X-ray #46"
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-teal-500"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-2">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Category
+                                </label>
+                                <select
+                                  value={test.category || 'Dental X-ray'}
+                                  onChange={(e) =>
+                                    setAdvisedTests((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, category: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  className="w-full px-2 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-teal-500"
+                                >
+                                  <option value="Dental X-ray">Dental X-ray</option>
+                                  <option value="IOPA">IOPA</option>
+                                  <option value="OPG">OPG</option>
+                                  <option value="CBCT">CBCT</option>
+                                  <option value="Lab / Blood">Lab / Blood</option>
+                                  <option value="Other">Other</option>
+                                </select>
+                              </div>
+
+                              <div className="sm:col-span-2">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Custom Rate ৳ (Opt.)
+                                </label>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="any"
+                                  value={test.cost ?? ''}
+                                  onChange={(e) =>
+                                    setAdvisedTests((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, cost: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="Custom ৳ (Opt.)"
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-semibold focus:ring-2 focus:ring-teal-500"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-2">
+                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
+                                  Indication (Opt.)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={test.notes || ''}
+                                  onChange={(e) =>
+                                    setAdvisedTests((prev) =>
+                                      prev.map((row, i) =>
+                                        i === idx ? { ...row, notes: e.target.value } : row
+                                      )
+                                    )
+                                  }
+                                  placeholder="Before extraction..."
+                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white focus:ring-2 focus:ring-teal-500"
+                                />
+                              </div>
+
+                              <div className="sm:col-span-1 flex justify-end">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setAdvisedTests((prev) => prev.filter((_, i) => i !== idx))
+                                  }
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                                  title="Remove Advised Test"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Cost Display Toggle & Live Estimated Total */}
+                    {(treatmentPlanItems.length > 0 || advisedTests.length > 0) && (() => {
+                      const planSum = treatmentPlanItems.reduce((sum, p) => {
+                        const n = p.cost !== undefined && p.cost !== null && String(p.cost).trim() !== '' ? Number(p.cost) : 0;
+                        return sum + (Number.isFinite(n) && n >= 0 ? n : 0);
+                      }, 0);
+                      const testSum = advisedTests.reduce((sum, t) => {
+                        const n = t.cost !== undefined && t.cost !== null && String(t.cost).trim() !== '' ? Number(t.cost) : 0;
+                        return sum + (Number.isFinite(n) && n >= 0 ? n : 0);
+                      }, 0);
+                      return (
+                        <div className="p-3 rounded-xl bg-teal-50/80 border border-teal-200 space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <label className="inline-flex items-center gap-2 font-semibold text-slate-800 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={showPlanCosts}
+                                onChange={(e) => setShowPlanCosts(e.target.checked)}
+                                className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500"
+                              />
+                              <span>Show estimated costs (৳) on Prescription Preview &amp; PDF</span>
+                            </label>
+
+                            <div className="flex flex-wrap items-center gap-3 text-xs">
+                              <span className="text-slate-600">
+                                Treatments:{' '}
+                                <strong className="font-mono text-slate-900">
+                                  ৳{planSum.toLocaleString()}
+                                </strong>
+                              </span>
+                              <span className="text-slate-600">
+                                Tests:{' '}
+                                <strong className="font-mono text-slate-900">
+                                  ৳{testSum.toLocaleString()}
+                                </strong>
+                              </span>
+                              <span className="px-2.5 py-1 rounded-lg bg-teal-700 text-white font-bold font-mono">
+                                Est. Total: ৳{(planSum + testSum).toLocaleString()}
+                              </span>
+                            </div>
+                          </div>
+
+                          <label className="inline-flex items-center gap-2 font-semibold text-teal-900 cursor-pointer pt-1.5 border-t border-teal-200/70 w-full">
+                            <input
+                              type="checkbox"
+                              checked={syncToPatientRecords}
+                              onChange={(e) => setSyncToPatientRecords(e.target.checked)}
+                              className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500"
+                            />
+                            <span>
+                              Sync Planned Treatments, Advised Tests, Follow-up &amp; Costs to Patient History &amp; Billing
+                            </span>
+                          </label>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
+
+              {/* STEP 3: DYNAMIC MEDICINES WITH SMART LOCAL CATALOG AUTOCOMPLETE (NO QUANTITY FIELD!) */}
+              <div className="p-4 rounded-xl border border-teal-200 bg-gradient-to-br from-teal-50/40 via-white to-teal-50/20 shadow-2xs space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-lg bg-teal-600 text-white text-xs font-extrabold flex items-center justify-center shadow-2xs">
+                        3
+                      </span>
                       <Pill className="w-4 h-4 text-teal-600" />
                       <span>Prescribed Medications ({medicines.length})</span>
                     </h3>
-                    <p className="text-[11px] text-slate-500">
+                    <p className="text-[11px] text-slate-500 mt-0.5">
                       Search the local Bangladesh medicine database by brand, generic, strength, dosage form, or manufacturer — or enter custom entries. Enter Dosage, Frequency, Duration &amp; Instructions freely in English or বাংলা.
                     </p>
                   </div>
@@ -2359,11 +2736,16 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                   {medicines.map((med, idx) => (
                     <div
                       key={idx}
-                      className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs space-y-3 relative"
+                      className="bg-white p-3.5 rounded-xl border border-slate-200 hover:border-teal-300/80 transition-colors shadow-2xs space-y-3 relative"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-bold text-teal-800">Medicine #{idx + 1}</span>
+                          <span className="inline-flex items-center gap-1.5 font-bold text-teal-900">
+                            <span className="w-5 h-5 rounded-md bg-teal-100 text-teal-800 text-[11px] font-extrabold flex items-center justify-center">
+                              {idx + 1}
+                            </span>
+                            <span>Medicine #{idx + 1}</span>
+                          </span>
                           {med.medicineId ? (
                             <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-teal-50 text-teal-800 border border-teal-200">
                               Catalog Matched{med.manufacturer ? ` · ${med.manufacturer}` : ''}
@@ -2650,28 +3032,127 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                                 </button>
                               );
                             })}
+                            <button
+                              type="button"
+                              onClick={() => updateMedicineField(idx, 'duration', 'চলবে')}
+                              className={`px-2 py-0.5 text-[10px] rounded cursor-pointer border transition-colors font-semibold ${
+                                med.duration === 'চলবে'
+                                  ? 'bg-teal-600 text-white border-teal-600 font-bold'
+                                  : 'bg-teal-50 hover:bg-teal-100 text-teal-800 border-teal-200'
+                              }`}
+                            >
+                              চলবে
+                            </button>
                           </div>
                         </div>
 
-                        <div>
+                        {/* Interactive Meal / Timing Instructions Input + Dropdown Button */}
+                        <div className="relative">
                           <label className="block font-semibold text-slate-700 mb-1">
                             Meal / Timing Instructions
                           </label>
-                          <input
-                            type="text"
-                            list={`meal-options-${idx}`}
-                            value={med.mealInstructions || ''}
-                            onChange={(e) =>
-                              updateMedicineField(idx, 'mealInstructions', e.target.value)
-                            }
-                            placeholder="After meals / খাবারের পরে..."
-                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300"
-                          />
-                          <datalist id={`meal-options-${idx}`}>
-                            {MEAL_OPTIONS.map((opt) => (
-                              <option key={opt} value={opt} />
-                            ))}
-                          </datalist>
+                          <div className="relative flex items-center">
+                            <input
+                              ref={(el) => {
+                                mealInputRefs.current[idx] = el;
+                              }}
+                              type="text"
+                              value={med.mealInstructions || ''}
+                              onFocus={() => setOpenMealDropdownIdx(idx)}
+                              onClick={() => setOpenMealDropdownIdx(idx)}
+                              onChange={(e) => {
+                                updateMedicineField(idx, 'mealInstructions', e.target.value);
+                                setOpenMealDropdownIdx(idx);
+                              }}
+                              onBlur={() => {
+                                setTimeout(() => {
+                                  setOpenMealDropdownIdx((prev) => (prev === idx ? null : prev));
+                                }, 180);
+                              }}
+                              placeholder="Select or write custom instruction..."
+                              className="w-full px-2.5 py-1.5 pr-8 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500 font-medium text-slate-900"
+                              autoComplete="off"
+                            />
+                            <button
+                              type="button"
+                              tabIndex={-1}
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                setOpenMealDropdownIdx((prev) => (prev === idx ? null : idx));
+                              }}
+                              className="absolute right-1.5 p-1 rounded-md text-slate-500 hover:text-teal-700 hover:bg-teal-50 transition-colors cursor-pointer"
+                              title="Show timing instruction options"
+                            >
+                              <ChevronDown
+                                className={`w-4 h-4 transition-transform ${
+                                  openMealDropdownIdx === idx ? 'rotate-180 text-teal-600' : ''
+                                }`}
+                              />
+                            </button>
+                          </div>
+
+                          {openMealDropdownIdx === idx && (
+                            <div
+                              className="absolute left-0 right-0 mt-1 bg-white border border-slate-300 rounded-xl shadow-xl z-40 overflow-hidden"
+                              onMouseDown={(e) => e.preventDefault()}
+                            >
+                              <div className="px-2.5 py-1 bg-slate-50 border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+                                <span>Timing Instructions</span>
+                                <span className="text-teal-700 font-semibold">Click or type custom</span>
+                              </div>
+                              <div className="divide-y divide-slate-100 max-h-56 overflow-y-auto">
+                                {MEAL_OPTIONS.map((opt) => {
+                                  const isSelected = med.mealInstructions === opt;
+                                  return (
+                                    <button
+                                      key={opt}
+                                      type="button"
+                                      onMouseDown={(e) => {
+                                        e.preventDefault();
+                                        updateMedicineField(idx, 'mealInstructions', opt);
+                                        setOpenMealDropdownIdx(null);
+                                      }}
+                                      className={`w-full text-left px-3 py-1.5 text-xs flex items-center justify-between transition-colors cursor-pointer ${
+                                        isSelected
+                                          ? 'bg-teal-50 text-teal-900 font-bold'
+                                          : 'text-slate-700 hover:bg-teal-50/60 font-medium'
+                                      }`}
+                                    >
+                                      <span>{opt}</span>
+                                      {isSelected && <Check className="w-3.5 h-3.5 text-teal-600" />}
+                                    </button>
+                                  );
+                                })}
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    setOpenMealDropdownIdx(null);
+                                    const inputEl = mealInputRefs.current[idx];
+                                    if (inputEl) {
+                                      inputEl.focus();
+                                      inputEl.select();
+                                    }
+                                  }}
+                                  className="w-full text-left px-3 py-1.5 text-[11px] font-semibold text-teal-700 bg-teal-50/40 hover:bg-teal-50 flex items-center justify-between cursor-pointer"
+                                >
+                                  <span>✎ Custom instruction (type in box)...</span>
+                                  {med.mealInstructions && (
+                                    <span
+                                      onMouseDown={(e) => {
+                                        e.stopPropagation();
+                                        e.preventDefault();
+                                        updateMedicineField(idx, 'mealInstructions', '');
+                                      }}
+                                      className="text-[10px] text-rose-600 hover:underline font-bold"
+                                    >
+                                      Clear
+                                    </span>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
 
@@ -2783,442 +3264,104 @@ export const PrescriptionFormModal: React.FC<PrescriptionFormModalProps> = ({
                 </div>
               </div>
 
-              {/* OPTIONAL: TREATMENT PLAN ITEMS & ADVISED TESTS (WITH OPTIONAL COST) */}
-              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3">
+              {/* STEP 4: পরবর্তী সাক্ষাতের তারিখ (NEXT FOLLOW-UP DATE — AFTER PRESCRIBED MEDICATIONS) */}
+              <div className="p-4 rounded-xl border border-teal-200 bg-white shadow-2xs space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <h3 className="font-bold text-slate-900 text-sm flex items-center gap-1.5 flex-wrap">
-                      <ClipboardList className="w-4 h-4 text-teal-600" />
-                      <span>Treatment Plan &amp; Advised Tests</span>
-                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-200/80 text-slate-700">
-                        Optional
+                    <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-lg bg-teal-600 text-white text-xs font-extrabold flex items-center justify-center shadow-2xs">
+                        4
                       </span>
-                      {(treatmentPlanItems.length > 0 || advisedTests.length > 0) && (
-                        <span className="text-[11px] font-semibold text-teal-800">
-                          ({treatmentPlanItems.length} treatment{treatmentPlanItems.length === 1 ? '' : 's'}, {advisedTests.length} test{advisedTests.length === 1 ? '' : 's'})
-                        </span>
-                      )}
+                      <CalendarCheck className="w-4 h-4 text-teal-600" />
+                      <span>পরবর্তী সাক্ষাতের তারিখ: (Next Follow-Up Date)</span>
                     </h3>
-                    <p className="text-[11px] text-slate-500">
-                      Optionally recommend procedures or diagnostic tests (with or without estimated costs in ৳). Leave empty to exclude from the prescription.
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Select the next follow-up appointment date after prescribing medications, or click a quick interval chip below.
                     </p>
                   </div>
+                  {followUpDate && (
+                    <span className="px-2.5 py-1 rounded-lg bg-teal-50 border border-teal-200 text-xs font-bold text-teal-900 flex items-center gap-1.5">
+                      <CalendarCheck className="w-3.5 h-3.5 text-teal-600" />
+                      <span>
+                        বাংলা তারিখ: {formatBanglaDate(followUpDate)} ({formatDateDDMMYYYY(followUpDate)})
+                      </span>
+                    </span>
+                  )}
+                </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowOptionalSections(true);
-                        setTreatmentPlanItems((prev) => [...prev, emptyTreatmentPlanItem()]);
-                      }}
-                      className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-white hover:bg-teal-50 text-teal-800 border border-teal-300 flex items-center gap-1 cursor-pointer"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>Add Planned Treatment</span>
-                    </button>
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+                  <div className="md:col-span-5">
+                    <input
+                      type="date"
+                      value={followUpDate}
+                      onChange={(e) => setFollowUpDate(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-teal-500 font-semibold text-slate-900"
+                    />
+                  </div>
+                  <div className="md:col-span-7 flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-semibold text-slate-500 mr-1">
+                      Quick Select:
+                    </span>
+                    {[
+                      { label: '+৩ দিন (3d)', days: 3 },
+                      { label: '+৫ দিন (5d)', days: 5 },
+                      { label: '+৭ দিন (7d)', days: 7 },
+                      { label: '+১০ দিন (10d)', days: 10 },
+                      { label: '+১৪ দিন (14d)', days: 14 },
+                      { label: '+১ মাস (30d)', days: 30 },
+                    ].map((chip) => {
+                      const baseDate = prescriptionDate
+                        ? new Date(`${prescriptionDate}T00:00:00`)
+                        : new Date();
+                      const target = new Date(
+                        Number.isNaN(baseDate.getTime()) ? Date.now() : baseDate.getTime()
+                      );
+                      target.setDate(target.getDate() + chip.days);
+                      const yyyy = target.getFullYear();
+                      const mm = String(target.getMonth() + 1).padStart(2, '0');
+                      const dd = String(target.getDate()).padStart(2, '0');
+                      const isoTarget = `${yyyy}-${mm}-${dd}`;
+                      const isActive = followUpDate === isoTarget;
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowOptionalSections(true);
-                        setAdvisedTests((prev) => [...prev, emptyAdvisedTestItem()]);
-                      }}
-                      className="px-2.5 py-1.5 text-xs font-bold rounded-lg bg-white hover:bg-cyan-50 text-cyan-800 border border-cyan-300 flex items-center gap-1 cursor-pointer"
-                    >
-                      <Radio className="w-3.5 h-3.5" />
-                      <span>Add Advised Test</span>
-                    </button>
-
-                    {(showOptionalSections ||
-                      treatmentPlanItems.length > 0 ||
-                      advisedTests.length > 0) && (
+                      return (
+                        <button
+                          key={chip.days}
+                          type="button"
+                          onClick={() => setFollowUpDate(isoTarget)}
+                          className={`px-2.5 py-1 text-xs rounded-lg border transition-colors cursor-pointer ${
+                            isActive
+                              ? 'bg-teal-600 text-white border-teal-600 font-bold shadow-2xs'
+                              : 'bg-slate-50 hover:bg-teal-50 text-slate-700 hover:text-teal-900 border-slate-200 hover:border-teal-300 font-semibold'
+                          }`}
+                        >
+                          {chip.label}
+                        </button>
+                      );
+                    })}
+                    {followUpDate && (
                       <button
                         type="button"
-                        onClick={() => setShowOptionalSections((v) => !v)}
-                        className="px-2 py-1.5 text-[11px] font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                        onClick={() => setFollowUpDate('')}
+                        className="px-2 py-1 text-[11px] font-semibold text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
                       >
-                        {showOptionalSections ? 'Collapse' : 'Expand'}
+                        Clear
                       </button>
                     )}
                   </div>
                 </div>
-
-                {showOptionalSections && (
-                  <div className="space-y-4 pt-2 border-t border-slate-200">
-                    {/* Sub-panel A: Optional Planned Treatments */}
-                    <div className="p-3.5 rounded-xl bg-white border border-teal-200 space-y-2.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-bold text-teal-900 flex items-center gap-1.5">
-                          <ClipboardList className="w-3.5 h-3.5 text-teal-600" />
-                          <span>Planned Treatments (Optional)</span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setTreatmentPlanItems((prev) => [...prev, emptyTreatmentPlanItem()])
-                          }
-                          className="text-[11px] font-bold text-teal-700 hover:underline flex items-center gap-1 cursor-pointer"
-                        >
-                          <Plus className="w-3 h-3" /> Add Row
-                        </button>
-                      </div>
-
-                      {/* Quick Presets */}
-                      <div className="flex flex-wrap gap-1.5">
-                        {QUICK_TREATMENT_PLAN_PRESETS.map((pt) => (
-                          <button
-                            key={pt.treatmentName}
-                            type="button"
-                            onClick={() =>
-                              setTreatmentPlanItems((prev) => [
-                                ...prev,
-                                {
-                                  treatmentName: pt.treatmentName,
-                                  toothNumber: '',
-                                  cost: pt.cost,
-                                  notes: '',
-                                },
-                              ])
-                            }
-                            className="px-2 py-0.5 text-[11px] rounded bg-slate-100 hover:bg-teal-50 hover:text-teal-800 border border-slate-200 hover:border-teal-300 text-slate-700 cursor-pointer"
-                          >
-                            + {pt.treatmentName} (৳{Number(pt.cost).toLocaleString()})
-                          </button>
-                        ))}
-                      </div>
-
-                      {treatmentPlanItems.length === 0 ? (
-                        <div className="text-[11px] text-slate-400 italic py-1">
-                          No planned treatments added. Click a preset or &ldquo;Add Row&rdquo; above if needed.
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {treatmentPlanItems.map((item, idx) => (
-                            <div
-                              key={idx}
-                              className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
-                            >
-                              <div className="sm:col-span-5">
-                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                                  Treatment / Procedure *
-                                </label>
-                                <input
-                                  type="text"
-                                  value={item.treatmentName}
-                                  onChange={(e) =>
-                                    setTreatmentPlanItems((prev) =>
-                                      prev.map((row, i) =>
-                                        i === idx ? { ...row, treatmentName: e.target.value } : row
-                                      )
-                                    )
-                                  }
-                                  placeholder="e.g., Root Canal Treatment"
-                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
-                                />
-                              </div>
-
-                              <div className="sm:col-span-2">
-                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                                  Tooth # (Opt.)
-                                </label>
-                                <input
-                                  type="text"
-                                  value={item.toothNumber || ''}
-                                  onChange={(e) =>
-                                    setTreatmentPlanItems((prev) =>
-                                      prev.map((row, i) =>
-                                        i === idx ? { ...row, toothNumber: e.target.value } : row
-                                      )
-                                    )
-                                  }
-                                  placeholder="e.g., 36"
-                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
-                                />
-                              </div>
-
-                              <div className="sm:col-span-2">
-                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                                  Cost ৳ (Opt.)
-                                </label>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="any"
-                                  value={item.cost ?? ''}
-                                  onChange={(e) =>
-                                    setTreatmentPlanItems((prev) =>
-                                      prev.map((row, i) =>
-                                        i === idx ? { ...row, cost: e.target.value } : row
-                                      )
-                                    )
-                                  }
-                                  placeholder="Optional"
-                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-semibold"
-                                />
-                              </div>
-
-                              <div className="sm:col-span-2">
-                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                                  Notes (Opt.)
-                                </label>
-                                <input
-                                  type="text"
-                                  value={item.notes || ''}
-                                  onChange={(e) =>
-                                    setTreatmentPlanItems((prev) =>
-                                      prev.map((row, i) =>
-                                        i === idx ? { ...row, notes: e.target.value } : row
-                                      )
-                                    )
-                                  }
-                                  placeholder="Stage / note..."
-                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
-                                />
-                              </div>
-
-                              <div className="sm:col-span-1 flex justify-end">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setTreatmentPlanItems((prev) =>
-                                      prev.filter((_, i) => i !== idx)
-                                    )
-                                  }
-                                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
-                                  title="Remove Treatment Item"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Sub-panel B: Optional Advised Diagnostic Tests */}
-                    <div className="p-3.5 rounded-xl bg-white border border-cyan-200 space-y-2.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-bold text-cyan-900 flex items-center gap-1.5">
-                          <Radio className="w-3.5 h-3.5 text-cyan-600" />
-                          <span>Advised Diagnostic Tests / X-rays (Optional)</span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setAdvisedTests((prev) => [...prev, emptyAdvisedTestItem()])
-                          }
-                          className="text-[11px] font-bold text-cyan-700 hover:underline flex items-center gap-1 cursor-pointer"
-                        >
-                          <Plus className="w-3 h-3" /> Add Row
-                        </button>
-                      </div>
-
-                      {/* Quick Test Presets */}
-                      <div className="flex flex-wrap gap-1.5">
-                        {QUICK_ADVISED_TEST_PRESETS.map((tp) => (
-                          <button
-                            key={tp.testName}
-                            type="button"
-                            onClick={() =>
-                              setAdvisedTests((prev) => [
-                                ...prev,
-                                {
-                                  testName: tp.testName,
-                                  category: tp.category,
-                                  cost: tp.cost,
-                                  notes: '',
-                                },
-                              ])
-                            }
-                            className="px-2 py-0.5 text-[11px] rounded bg-slate-100 hover:bg-cyan-50 hover:text-cyan-800 border border-slate-200 hover:border-cyan-300 text-slate-700 cursor-pointer"
-                          >
-                            + {tp.testName}
-                            {Number(tp.cost) > 0 ? ` (৳${Number(tp.cost).toLocaleString()})` : ''}
-                          </button>
-                        ))}
-                      </div>
-
-                      {advisedTests.length === 0 ? (
-                        <div className="text-[11px] text-slate-400 italic py-1">
-                          No diagnostic tests advised. Click a preset or &ldquo;Add Row&rdquo; above if needed.
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {advisedTests.map((test, idx) => (
-                            <div
-                              key={idx}
-                              className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end"
-                            >
-                              <div className="sm:col-span-5">
-                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                                  Advised Test / Investigation *
-                                </label>
-                                <input
-                                  type="text"
-                                  value={test.testName}
-                                  onChange={(e) =>
-                                    setAdvisedTests((prev) =>
-                                      prev.map((row, i) =>
-                                        i === idx ? { ...row, testName: e.target.value } : row
-                                      )
-                                    )
-                                  }
-                                  placeholder="e.g., Digital IOPA X-ray #46"
-                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
-                                />
-                              </div>
-
-                              <div className="sm:col-span-2">
-                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                                  Category
-                                </label>
-                                <select
-                                  value={test.category || 'Dental X-ray'}
-                                  onChange={(e) =>
-                                    setAdvisedTests((prev) =>
-                                      prev.map((row, i) =>
-                                        i === idx ? { ...row, category: e.target.value } : row
-                                      )
-                                    )
-                                  }
-                                  className="w-full px-2 py-1.5 rounded-lg border border-slate-300 bg-white"
-                                >
-                                  <option value="Dental X-ray">Dental X-ray</option>
-                                  <option value="IOPA">IOPA</option>
-                                  <option value="OPG">OPG</option>
-                                  <option value="CBCT">CBCT</option>
-                                  <option value="Lab / Blood">Lab / Blood</option>
-                                  <option value="Other">Other</option>
-                                </select>
-                              </div>
-
-                              <div className="sm:col-span-2">
-                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                                  Custom Rate ৳ (Opt.)
-                                </label>
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="any"
-                                  value={test.cost ?? ''}
-                                  onChange={(e) =>
-                                    setAdvisedTests((prev) =>
-                                      prev.map((row, i) =>
-                                        i === idx ? { ...row, cost: e.target.value } : row
-                                      )
-                                    )
-                                  }
-                                  placeholder="Custom ৳ (Opt.)"
-                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white font-semibold"
-                                />
-                              </div>
-
-                              <div className="sm:col-span-2">
-                                <label className="block text-[11px] font-semibold text-slate-700 mb-0.5">
-                                  Indication (Opt.)
-                                </label>
-                                <input
-                                  type="text"
-                                  value={test.notes || ''}
-                                  onChange={(e) =>
-                                    setAdvisedTests((prev) =>
-                                      prev.map((row, i) =>
-                                        i === idx ? { ...row, notes: e.target.value } : row
-                                      )
-                                    )
-                                  }
-                                  placeholder="Before extraction..."
-                                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
-                                />
-                              </div>
-
-                              <div className="sm:col-span-1 flex justify-end">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setAdvisedTests((prev) => prev.filter((_, i) => i !== idx))
-                                  }
-                                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
-                                  title="Remove Advised Test"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Cost Display Toggle & Live Estimated Total */}
-                    {(treatmentPlanItems.length > 0 || advisedTests.length > 0) && (() => {
-                      const planSum = treatmentPlanItems.reduce((sum, p) => {
-                        const n = p.cost !== undefined && p.cost !== null && String(p.cost).trim() !== '' ? Number(p.cost) : 0;
-                        return sum + (Number.isFinite(n) && n >= 0 ? n : 0);
-                      }, 0);
-                      const testSum = advisedTests.reduce((sum, t) => {
-                        const n = t.cost !== undefined && t.cost !== null && String(t.cost).trim() !== '' ? Number(t.cost) : 0;
-                        return sum + (Number.isFinite(n) && n >= 0 ? n : 0);
-                      }, 0);
-                      return (
-                        <div className="p-3 rounded-xl bg-teal-50/80 border border-teal-200 space-y-2">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <label className="inline-flex items-center gap-2 font-semibold text-slate-800 cursor-pointer">
-                              <input
-                                type="checkbox"
-                                checked={showPlanCosts}
-                                onChange={(e) => setShowPlanCosts(e.target.checked)}
-                                className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500"
-                              />
-                              <span>Show estimated costs (৳) on Prescription Preview &amp; PDF</span>
-                            </label>
-
-                            <div className="flex flex-wrap items-center gap-3 text-xs">
-                              <span className="text-slate-600">
-                                Treatments:{' '}
-                                <strong className="font-mono text-slate-900">
-                                  ৳{planSum.toLocaleString()}
-                                </strong>
-                              </span>
-                              <span className="text-slate-600">
-                                Tests:{' '}
-                                <strong className="font-mono text-slate-900">
-                                  ৳{testSum.toLocaleString()}
-                                </strong>
-                              </span>
-                              <span className="px-2.5 py-1 rounded-lg bg-teal-700 text-white font-bold font-mono">
-                                Est. Total: ৳{(planSum + testSum).toLocaleString()}
-                              </span>
-                            </div>
-                          </div>
-
-                          <label className="inline-flex items-center gap-2 font-semibold text-teal-900 cursor-pointer pt-1.5 border-t border-teal-200/70 w-full">
-                            <input
-                              type="checkbox"
-                              checked={syncToPatientRecords}
-                              onChange={(e) => setSyncToPatientRecords(e.target.checked)}
-                              className="w-4 h-4 rounded text-teal-600 focus:ring-teal-500"
-                            />
-                            <span>
-                              Sync Planned Treatments, Advised Tests, Follow-up &amp; Costs to Patient History &amp; Billing
-                            </span>
-                          </label>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
               </div>
 
-              {/* BANGLA DENTAL CARE & POST-TREATMENT INSTRUCTIONS */}
-              <div className="p-4 rounded-xl border border-slate-200 bg-white space-y-3">
+              {/* STEP 5: BANGLA DENTAL CARE & POST-TREATMENT INSTRUCTIONS */}
+              <div className="p-4 rounded-xl border border-slate-200 bg-white shadow-2xs space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
                   <div>
-                    <h3 className="font-bold text-slate-900 text-sm">
-                      দাঁতের যত্ন ও চিকিৎসা-পরবর্তী নির্দেশনা
+                    <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-lg bg-teal-600 text-white text-xs font-extrabold flex items-center justify-center shadow-2xs">
+                        5
+                      </span>
+                      <span>দাঁতের যত্ন ও চিকিৎসা-পরবর্তী নির্দেশনা</span>
                     </h3>
-                    <p className="text-[11px] text-slate-500">
+                    <p className="text-[11px] text-slate-500 mt-0.5">
                       রোগীর বোঝার সুবিধার্থে বাংলায় (অথবা ইংরেজিতে) যত্ন ও পরামর্শ লিখুন অথবা নমুনা নির্দেশনা যুক্ত করে প্রয়োজনমতো পরিবর্তন করুন।
                     </p>
                   </div>
