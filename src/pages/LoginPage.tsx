@@ -12,12 +12,15 @@ import {
   KeyRound,
   CheckCircle2,
   X,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 export const LoginPage: React.FC = () => {
   const { login, loginWithGoogle, quickSwitch } = useAuth();
   const [username, setUsername] = useState('maindoctor');
   const [password, setPassword] = useState('ClinicAdmin@2026');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,7 +36,19 @@ export const LoginPage: React.FC = () => {
     message: string;
   } | null>(null);
 
-  const isTypingDeveloper = username.trim().toLowerCase() === 'dev_admin';
+  const normalizedTypedUser = username.trim().toLowerCase();
+  const isTypingDeveloper =
+    normalizedTypedUser === 'dev_admin' ||
+    normalizedTypedUser === 'developer' ||
+    normalizedTypedUser === 'aminulislamaymon@gmail.com' ||
+    normalizedTypedUser === 'aymon@dentalcare.com';
+
+  const handleUsernameChange = (nextVal: string) => {
+    setUsername(nextVal);
+    if (nextVal.trim().toLowerCase() !== 'maindoctor' && password === 'ClinicAdmin@2026') {
+      setPassword('');
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -130,7 +145,7 @@ export const LoginPage: React.FC = () => {
                   required
                   placeholder="e.g. maindoctor or dr_rahim"
                   value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  onChange={(e) => handleUsernameChange(e.target.value)}
                   className="w-full pl-9 pr-3 py-2.5 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
                 <UserIcon className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
@@ -158,14 +173,22 @@ export const LoginPage: React.FC = () => {
               </div>
               <div className="relative">
                 <input
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   required
                   placeholder="Enter password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2.5 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                  className="w-full pl-9 pr-9 py-2.5 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
                 <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute right-2.5 top-2.5 p-0.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  title={showPassword ? 'Hide password' : 'Show password'}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
             </div>
 
