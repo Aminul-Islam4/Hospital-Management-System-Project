@@ -64,11 +64,11 @@ For immediate demonstration and testing of the shared patient tracking scenario:
 
 | Role | Username | Password | Doctor / User Name | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| **Main Doctor** | `maindoctor` | `ClinicAdmin@2026` | Prof. Dr. Kazi M. Rahman | Clinic Owner & Super Admin |
-| **Developer** | `dev_admin` | `DevDental@2026` | Farhan Ahmed | Technical Admin & Database Backup |
-| **Doctor A** | `dr_rahim` | `Doctor@123` | Dr. Rahim Chowdhury | Senior Dental Surgeon (Visit 1) |
-| **Doctor B** | `dr_fatima` | `Doctor@123` | Dr. Fatima Akter | Endodontist & Conservative (Visit 2) |
-| **Doctor C** | `dr_tariq` | `Doctor@123` | Dr. Tariqul Islam | Orthodontics & Surgery (Visit 3) |
+| **Main Doctor** | `` | `` | Prof. Dr. Kazi M. Rahman | Clinic Owner & Super Admin |
+| **Developer** | `` | `` | Farhan Ahmed | Technical Admin & Database Backup |
+| **Doctor A** | `` | `` | Dr. Rahim Chowdhury | Senior Dental Surgeon (Visit 1) |
+| **Doctor B** | `` | `` | Dr. Fatima Akter | Endodontist & Conservative (Visit 2) |
+| **Doctor C** | `` | `` | Dr. Tariqul Islam | Orthodontics & Surgery (Visit 3) |
 
 *Tip: You can also use the **1-Click Test Login** buttons on the Login page to switch between doctors instantly.*
 
