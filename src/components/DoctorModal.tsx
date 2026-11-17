@@ -259,7 +259,6 @@ export const DoctorModal: React.FC<DoctorModalProps> = ({
               >
                 <option value="doctor">Doctor (Centralized Patient Access)</option>
                 <option value="main_doctor">Main Doctor (Super Admin)</option>
-                <option value="developer">Developer (Full Technical Access)</option>
               </select>
             </div>
           )}

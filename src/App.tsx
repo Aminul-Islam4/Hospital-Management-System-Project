@@ -27,7 +27,7 @@ import { PrescriptionFormModal } from './components/PrescriptionFormModal.tsx';
 import { PrescriptionPreviewModal } from './components/PrescriptionPreviewModal.tsx';
 import { Patient, Prescription, User } from './types/index.ts';
 import { api } from './services/api.ts';
-import { Activity } from 'lucide-react';
+import { Activity, ShieldAlert } from 'lucide-react';
 
 function resolveInitialTab(): string {
   if (typeof window === 'undefined') return 'dashboard';
@@ -45,8 +45,21 @@ function resolveInitialTab(): string {
   return 'dashboard';
 }
 
+const TAB_TO_FEATURE_KEY: Record<string, string> = {
+  patients: 'patient_management',
+  'my-patients': 'patient_management',
+  'patient-detail': 'patient_management',
+  visits: 'visit_management',
+  prescriptions: 'prescription_management',
+  payments: 'payment_management',
+  followups: 'appointment_management',
+  doctors: 'doctor_management',
+  'salary-sheet': 'salary_payroll',
+  exports: 'data_backup_export',
+};
+
 function AppContent() {
-  const { user, loading, prescriptionManagementEnabled } = useAuth();
+  const { user, loading, prescriptionManagementEnabled, isFeatureAccessible, getFeatureStatusReason } = useAuth();
 
   // Navigation tab
   const [currentTab, setCurrentTab] = useState<string>(() => resolveInitialTab());
@@ -213,6 +226,37 @@ function AppContent() {
 
         <main className="flex-1 p-3 sm:p-6 lg:p-8 pb-24 md:pb-8 max-w-7xl mx-auto w-full flex flex-col justify-between">
           <div>
+            {TAB_TO_FEATURE_KEY[currentTab] && !isFeatureAccessible(TAB_TO_FEATURE_KEY[currentTab]) ? (
+              <div className="bg-white rounded-2xl border border-amber-200 shadow-xs p-8 text-center max-w-xl mx-auto my-12">
+                <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto mb-4 text-amber-600">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <h2 className="text-lg font-bold text-slate-900">Module Access Restricted</h2>
+                <p className="text-sm text-slate-600 mt-2 leading-relaxed">
+                  {getFeatureStatusReason(TAB_TO_FEATURE_KEY[currentTab]) ||
+                    'This module is currently unavailable for your role or subscription package.'}
+                </p>
+                <div className="mt-5 flex items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentTab('dashboard')}
+                    className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold cursor-pointer"
+                  >
+                    Return to Dashboard
+                  </button>
+                  {user.role === 'developer' && (
+                    <button
+                      type="button"
+                      onClick={() => setCurrentTab('developer-profile')}
+                      className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold cursor-pointer"
+                    >
+                      Open Developer Control Center
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <>
             {currentTab === 'dashboard' && (
               <DashboardPage
                 refreshKey={refreshKey}
@@ -316,6 +360,8 @@ function AppContent() {
             {currentTab === 'settings' && <SettingsPage key={refreshKey} />}
 
             {currentTab === 'developer-profile' && <DeveloperProfilePage />}
+              </>
+            )}
           </div>
 
           <footer className="mt-10 pt-4 border-t border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">

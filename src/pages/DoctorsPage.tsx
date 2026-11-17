@@ -37,7 +37,11 @@ export const DoctorsPage: React.FC<DoctorsPageProps> = ({ refreshKey, onOpenDoct
     setLoading(true);
     try {
       const data = await api.getDoctors();
-      setDoctors(data);
+      setDoctors(
+        user?.role === 'developer'
+          ? data
+          : data.filter((d) => d.role !== 'developer')
+      );
     } catch (e) {
       console.error('Failed to load doctors:', e);
     } finally {

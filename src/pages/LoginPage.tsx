@@ -1,14 +1,17 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { api } from '../services/api.ts';
 import {
   Activity,
   Lock,
   User as UserIcon,
   Sparkles,
   Shield,
-  Code,
   Stethoscope,
   AlertCircle,
+  KeyRound,
+  CheckCircle2,
+  X,
 } from 'lucide-react';
 
 export const LoginPage: React.FC = () => {
@@ -17,6 +20,20 @@ export const LoginPage: React.FC = () => {
   const [password, setPassword] = useState('ClinicAdmin@2026');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Developer Emergency Recovery Modal (only accessible when typing dev_admin)
+  const [showRecoveryModal, setShowRecoveryModal] = useState(false);
+  const [recoveryKey, setRecoveryKey] = useState('');
+  const [newDevPassword, setNewDevPassword] = useState('');
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recoveryResult, setRecoveryResult] = useState<{
+    username: string;
+    currentPassword: string;
+    message: string;
+  } | null>(null);
+
+  const isTypingDeveloper = username.trim().toLowerCase() === 'dev_admin';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,6 +72,26 @@ export const LoginPage: React.FC = () => {
     }
   };
 
+  const handleDeveloperRecovery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setRecoveryError(null);
+    setRecoveryResult(null);
+    setRecoveryLoading(true);
+    try {
+      const res = await api.recoverDeveloperPassword({
+        recoveryKey: recoveryKey.trim(),
+        newPassword: newDevPassword.trim() || undefined,
+      });
+      setRecoveryResult(res);
+      setUsername(res.username);
+      setPassword(res.currentPassword);
+    } catch (err: any) {
+      setRecoveryError(err.message || 'Invalid recovery key.');
+    } finally {
+      setRecoveryLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col justify-center py-8 sm:py-12 px-4 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
@@ -68,7 +105,7 @@ export const LoginPage: React.FC = () => {
           Patient Tracking &amp; Multi-Doctor Management • BDT ৳
         </p>
         <p className="mt-1 text-xs text-slate-400">
-          Centralized Patient Records &amp; Pre-Day Follow-Up SMS System · Lead Developer: <strong className="text-teal-300">Aymon</strong>
+          Centralized Patient Records, Digital Prescriptions &amp; Follow-Up System
         </p>
       </div>
 
@@ -101,9 +138,24 @@ export const LoginPage: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Password
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-slate-700">
+                  Password
+                </label>
+                {isTypingDeveloper && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowRecoveryModal(true);
+                      setRecoveryError(null);
+                      setRecoveryResult(null);
+                    }}
+                    className="text-[11px] font-semibold text-purple-700 hover:text-purple-900 underline cursor-pointer"
+                  >
+                    Forgot Developer Password?
+                  </button>
+                )}
+              </div>
               <div className="relative">
                 <input
                   type="password"
@@ -163,11 +215,11 @@ export const LoginPage: React.FC = () => {
             <span>Google Account</span>
           </button>
 
-          {/* 1-Click Test User Buttons for instant verification */}
+          {/* 1-Click Clinic Doctor Demo Buttons (Developer account excluded for client demo) */}
           <div className="pt-2 border-t border-slate-200">
             <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 mb-2">
               <Sparkles className="w-3.5 h-3.5 text-teal-600" />
-              <span>1-Click Role Switch / Quick Login:</span>
+              <span>1-Click Clinic Role Switch / Quick Login:</span>
             </div>
             <div className="grid grid-cols-1 gap-1.5 text-xs">
               <button
@@ -179,7 +231,7 @@ export const LoginPage: React.FC = () => {
                   <Shield className="w-4 h-4 text-emerald-600 shrink-0" />
                   <div>
                     <div className="font-bold">Prof. Dr. Rahman (Main Doctor)</div>
-                    <div className="text-[11px] text-emerald-700">Super Admin • All Modules</div>
+                    <div className="text-[11px] text-emerald-700">Super Admin • All Clinic Modules</div>
                   </div>
                 </div>
                 <span className="text-[10px] font-bold bg-emerald-200/80 px-2 py-0.5 rounded text-emerald-800 shrink-0">1-Click</span>
@@ -229,25 +281,111 @@ export const LoginPage: React.FC = () => {
                 </div>
                 <span className="text-[10px] font-bold bg-sky-200/80 px-2 py-0.5 rounded text-sky-800 shrink-0">1-Click</span>
               </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('dev_admin')}
-                className="w-full text-left p-2.5 rounded-lg bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-900 transition-colors flex items-center justify-between cursor-pointer"
-              >
-                <div className="flex items-center gap-2">
-                  <Code className="w-4 h-4 text-purple-600 shrink-0" />
-                  <div>
-                    <div className="font-bold">Lead Developer (Aymon)</div>
-                    <div className="text-[11px] text-purple-700">Full System &bull; Database Backup</div>
-                  </div>
-                </div>
-                <span className="text-[10px] font-bold bg-purple-200/80 px-2 py-0.5 rounded text-purple-800 shrink-0">1-Click</span>
-              </button>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Developer Emergency Password Recovery Modal */}
+      {showRecoveryModal && (
+        <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden">
+            <div className="px-5 py-4 bg-purple-950 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-purple-300" />
+                <h3 className="text-sm font-bold">Developer Emergency Password Recovery</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowRecoveryModal(false)}
+                className="p-1 text-purple-200 hover:text-white rounded cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleDeveloperRecovery} className="p-5 space-y-4 text-xs">
+              <p className="text-slate-600 leading-relaxed">
+                Enter your registered <strong>Developer Recovery Key</strong> or <strong>Developer Email</strong> to reveal your current password or set a new one.
+              </p>
+
+              {recoveryError && (
+                <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-red-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{recoveryError}</span>
+                </div>
+              )}
+
+              {recoveryResult && (
+                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 space-y-1.5">
+                  <div className="flex items-center gap-1.5 font-bold text-emerald-800">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    <span>{recoveryResult.message}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 pt-1 font-mono text-xs">
+                    <div className="p-2 bg-white rounded border border-emerald-200">
+                      <span className="text-[10px] text-slate-500 block font-sans">Username</span>
+                      <strong>{recoveryResult.username}</strong>
+                    </div>
+                    <div className="p-2 bg-white rounded border border-emerald-200">
+                      <span className="text-[10px] text-slate-500 block font-sans">Active Password</span>
+                      <strong>{recoveryResult.currentPassword}</strong>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Developer Recovery Key or Email *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Enter recovery key or registered developer email"
+                  value={recoveryKey}
+                  onChange={(e) => setRecoveryKey(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  New Developer Password (Optional — leave blank to view current)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Min 6 chars to set a new password"
+                  value={newDevPassword}
+                  onChange={(e) => setNewDevPassword(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-600"
+                />
+              </div>
+
+              <div className="pt-2 border-t border-slate-200 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowRecoveryModal(false)}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  Close
+                </button>
+                <button
+                  type="submit"
+                  disabled={recoveryLoading}
+                  className="px-4 py-1.5 rounded-lg bg-purple-700 hover:bg-purple-800 text-white font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  {recoveryLoading
+                    ? 'Verifying...'
+                    : newDevPassword.trim()
+                    ? 'Reset & Fill Password'
+                    : 'Reveal & Fill Password'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

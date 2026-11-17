@@ -439,18 +439,106 @@ export const api = {
     window.URL.revokeObjectURL(url);
   },
 
-  // Application Feature Flags (Developer Controlled)
+  // Application Feature Flags & Subscription Control (Developer Controlled)
   getFeatures: () =>
-    request<{ prescriptionManagement: boolean; flags: ApplicationFeatureFlag[] }>('/api/features'),
+    request<{
+      prescriptionManagement: boolean;
+      prescriptionManagementEnabled: boolean;
+      flags: ApplicationFeatureFlag[];
+      features: ApplicationFeatureFlag[];
+      subscription?: any;
+      activePackage?: any;
+    }>('/api/features'),
 
-  toggleFeature: (key: string, isEnabled: boolean) =>
-    request<{ success: boolean; flag: ApplicationFeatureFlag; prescriptionManagement: boolean }>(
-      `/api/developer/features/${key}`,
+  toggleFeature: (
+    key: string,
+    isEnabled: boolean,
+    extra?: {
+      featureName?: string;
+      description?: string;
+      moduleCategory?: string;
+      applicableRoles?: string[];
+    }
+  ) =>
+    request<{
+      success: boolean;
+      flag: ApplicationFeatureFlag;
+      prescriptionManagement: boolean;
+      features: ApplicationFeatureFlag[];
+    }>(`/api/developer/features/${key}`, {
+      method: 'PUT',
+      body: JSON.stringify({ isEnabled, ...extra }),
+    }),
+
+  getDeveloperControlCenter: () =>
+    request<{
+      prescriptionManagement: boolean;
+      features: ApplicationFeatureFlag[];
+      packages: any[];
+      subscription: any;
+      activePackage: any;
+      usageMetrics: {
+        doctorsCount: number;
+        totalUsersCount: number;
+        patientsCount: number;
+        branchesCount: number;
+      };
+      auditLogs: any[];
+    }>('/api/developer/control-center'),
+
+  saveSubscriptionPackage: (data: any) =>
+    request<{ success: boolean; features: ApplicationFeatureFlag[] }>('/api/developer/packages', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updateClinicSubscription: (data: any) =>
+    request<{ success: boolean; subscription: any; features: ApplicationFeatureFlag[] }>(
+      '/api/developer/subscription',
       {
         method: 'PUT',
-        body: JSON.stringify({ isEnabled }),
+        body: JSON.stringify(data),
       }
     ),
+
+  getDeveloperCredentials: () =>
+    request<
+      {
+        id: number;
+        username: string;
+        fullName: string;
+        role: string;
+        email: string | null;
+        phone: string | null;
+        specialization: string | null;
+        isActive: boolean;
+        hasPasswordHash: boolean;
+        currentPassword: string;
+        passwordUpdatedAt: string | null;
+      }[]
+    >('/api/developer/credentials'),
+
+  updateDeveloperCredential: (id: number, data: { newPassword: string; username?: string }) =>
+    request<{
+      success: boolean;
+      username: string;
+      currentPassword: string;
+      message: string;
+    }>(`/api/developer/credentials/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  recoverDeveloperPassword: (data: { recoveryKey: string; newPassword?: string }) =>
+    request<{
+      success: boolean;
+      username: string;
+      currentPassword: string;
+      message: string;
+    }>('/api/auth/developer-recovery', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 
   // Prescription Management Module
   getPrescriptions: (params: {
@@ -659,7 +747,7 @@ export const api = {
       method: 'POST',
     }),
 
-  // Doctor Salary Sheet (Main Doctor / Admin)
+  // Doctor Salary Sheet & Payroll Management (Main Doctor / Developer)
   getDoctorSalaries: (
     params: {
       doctorId?: number | string;
@@ -708,6 +796,222 @@ export const api = {
     request<{ success: boolean }>(`/api/doctor-salaries/${id}`, {
       method: 'DELETE',
     }),
+
+  getPayrollOverview: (month?: string) => {
+    const q = month ? `?month=${encodeURIComponent(month)}` : '';
+    return request<{
+      structures: any[];
+      salaries: DoctorSalary[];
+      allPayments: any[];
+      auditLogs: any[];
+    }>(`/api/payroll/overview${q}`);
+  },
+
+  getSalaryStructureHistory: (doctorId: number) =>
+    request<any[]>(`/api/payroll/structures/${doctorId}/history`),
+
+  saveSalaryStructure: (data: any) =>
+    request<{ success: boolean; structureId: number }>('/api/payroll/structures', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  generateMonthlyPayroll: (payrollMonth: string, paymentDate?: string) =>
+    request<{
+      success: boolean;
+      createdCount: number;
+      skippedCount: number;
+      skippedDoctors: string[];
+    }>('/api/payroll/generate-monthly', {
+      method: 'POST',
+      body: JSON.stringify({ payrollMonth, paymentDate }),
+    }),
+
+  finalizePayrollRecord: (salaryId: number) =>
+    request<{ success: boolean }>(`/api/doctor-salaries/${salaryId}/finalize`, {
+      method: 'POST',
+    }),
+
+  recordSalaryPayment: (
+    salaryId: number,
+    data: {
+      amount: number | string;
+      paymentDate: string;
+      paymentMethod: string;
+      transactionRef?: string;
+      notes?: string;
+    }
+  ) =>
+    request<{
+      success: boolean;
+      paymentCode: string;
+      paidAmount: number;
+      dueAmount: number;
+      paymentStatus: string;
+      payrollStatus: string;
+    }>(`/api/doctor-salaries/${salaryId}/payments`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  recordSalaryAdjustment: (
+    salaryId: number,
+    data: {
+      adjustmentType: 'Allowance' | 'Deduction' | 'Correction';
+      amount: number | string;
+      reason: string;
+    }
+  ) =>
+    request<{
+      success: boolean;
+      previousPayable: number;
+      newPayable: number;
+      newDue: number;
+      paymentStatus: string;
+    }>(`/api/doctor-salaries/${salaryId}/adjustments`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  // Backup & Structured ZIP / CSV Export Center
+  previewBackup: (data: {
+    preset?: string;
+    fromDate?: string;
+    toDate?: string;
+    doctorId?: number | string | null;
+    selectedModules?: string[];
+  }) =>
+    request<any>('/api/backup/preview', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  downloadZipBackup: async (data: {
+    preset?: string;
+    fromDate?: string;
+    toDate?: string;
+    doctorId?: number | string | null;
+    selectedModules?: string[];
+  }) => {
+    const token = getStoredToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch('/api/backup/download-zip', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(data),
+    });
+
+    if (!res.ok) {
+      let msg = 'Failed to generate ZIP backup archive';
+      try {
+        const errData = await res.json();
+        msg = errData.error || msg;
+      } catch {}
+      throw new Error(msg);
+    }
+
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match ? match[1] : `Clinic_Backup_${new Date().toISOString().slice(0, 10)}.zip`;
+
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+    return filename;
+  },
+
+  downloadRecoverySnapshot: async () => {
+    const token = getStoredToken();
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch('/api/backup/recovery-snapshot', { headers });
+    if (!res.ok) {
+      let msg = 'Failed to download recovery snapshot';
+      try {
+        const errData = await res.json();
+        msg = errData.error || msg;
+      } catch {}
+      throw new Error(msg);
+    }
+
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename =
+      match ? match[1] : `Clinic_Recovery_Snapshot_${new Date().toISOString().slice(0, 10)}.json`;
+
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+    return filename;
+  },
+
+  getBackupHistory: () => request<any[]>('/api/backup/history'),
+
+  previewRestoreBackup: (snapshot: any) =>
+    request<{
+      valid: boolean;
+      snapshotId: string;
+      generatedAt: string | null;
+      summary: {
+        totalInFile: number;
+        totalNewToImport: number;
+        totalDuplicatesSkipped: number;
+      };
+      modules: Record<
+        string,
+        {
+          label: string;
+          inFile: number;
+          newToImport: number;
+          duplicatesSkipped: number;
+        }
+      >;
+    }>('/api/backup/restore-preview', {
+      method: 'POST',
+      body: JSON.stringify({ snapshot }),
+    }),
+
+  executeRestoreBackup: (snapshot: any, filename?: string) =>
+    request<{
+      success: boolean;
+      snapshotId: string;
+      generatedAt: string | null;
+      summary: {
+        totalInFile: number;
+        totalNewToImport: number;
+        totalDuplicatesSkipped: number;
+      };
+      modules: Record<
+        string,
+        {
+          label: string;
+          inFile: number;
+          newToImport: number;
+          duplicatesSkipped: number;
+        }
+      >;
+    }>('/api/backup/restore-execute', {
+      method: 'POST',
+      body: JSON.stringify({ snapshot, filename }),
+    }),
 };
+
 
 

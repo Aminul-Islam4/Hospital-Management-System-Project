@@ -252,8 +252,63 @@ export interface ApplicationFeatureFlag {
   featureKey: string;
   featureName: string;
   description?: string | null;
+  moduleCategory?: string;
   isEnabled: boolean;
+  globalEnabled?: boolean;
+  packageEntitlement?: 'ON' | 'OFF' | 'Limited';
+  applicableRoles?: string[];
+  effectiveEnabled?: boolean;
   updatedAt?: string | null;
+}
+
+export interface SubscriptionPackage {
+  id: number;
+  packageKey: string;
+  packageName: string;
+  description?: string | null;
+  monthlyPriceBdt: string;
+  annualPriceBdt: string;
+  featureEntitlements: Record<string, 'ON' | 'OFF' | 'Limited'>;
+  limits: {
+    maxDoctors?: number | null;
+    maxStaff?: number | null;
+    maxPatients?: number | null;
+    maxBranches?: number | null;
+    storageMb?: number | null;
+    monthlyBackups?: number | null;
+  };
+  isActive: boolean;
+  sortOrder: number;
+  updatedAt?: string | null;
+}
+
+export interface ClinicSubscription {
+  id: number;
+  clinicCode: string;
+  clinicName: string;
+  branchCode: string;
+  packageId?: number | null;
+  packageKey: string;
+  packageName: string;
+  status: 'Active' | 'Trial' | 'Expired' | 'Suspended' | 'Canceled';
+  startDate: string;
+  expiryDate?: string | null;
+  trialEndsAt?: string | null;
+  notes?: string | null;
+  isOperational?: boolean;
+  limits?: Record<string, number | null>;
+}
+
+export interface SubscriptionAuditLog {
+  id: number;
+  userId?: number | null;
+  userRole: string;
+  action: string;
+  targetKey: string;
+  previousStateJson?: string | null;
+  newStateJson?: string | null;
+  details?: string | null;
+  createdAt: string;
 }
 
 export type PrescriptionStatus = 'Draft' | 'Finalized' | 'Revised';
@@ -570,6 +625,37 @@ export interface Prescription {
 
 export type DoctorSalaryType = 'Monthly' | 'Daily' | 'Commission';
 export type DoctorSalaryStatus = 'Paid' | 'Partial' | 'Pending';
+export type PayrollLifecycleStatus = 'Draft' | 'Finalized' | 'Partially Paid' | 'Paid';
+
+export interface SalaryPaymentRecord {
+  id: number;
+  paymentCode: string;
+  salaryId: number;
+  doctorId: number;
+  doctorName?: string;
+  amount: number;
+  paymentDate: string;
+  paymentMethod: string;
+  transactionRef?: string | null;
+  notes?: string | null;
+  recordedBy?: number | null;
+  recordedByName?: string;
+  createdAt?: string;
+}
+
+export interface SalaryAdjustmentRecord {
+  id: number;
+  salaryId: number;
+  doctorId: number;
+  adjustmentType: string;
+  amount: number;
+  previousPayable: number;
+  newPayable: number;
+  reason: string;
+  authorizedBy?: number | null;
+  authorizedByName?: string;
+  createdAt?: string;
+}
 
 export interface DoctorSalary {
   id: number;
@@ -581,28 +667,95 @@ export interface DoctorSalary {
   doctorRole?: string;
   salaryType: DoctorSalaryType;
   periodLabel: string;
+  payrollMonth?: string | null;
+  payrollYear?: number | null;
   periodStart?: string | null;
   periodEnd?: string | null;
-  baseAmount: string;
+  baseAmount: string | number;
   daysWorked: number;
-  commissionBasis?: 'collected' | 'billed' | 'custom' | null;
-  commissionSourceAmount: string;
-  commissionRate: string;
-  commissionEarned: string;
-  bonusAmount: string;
-  deductionAmount: string;
-  totalPayable: string;
-  paidAmount: string;
-  dueAmount: string;
+  commissionBasis?: 'collected' | 'billed' | 'treatment_revenue' | 'custom' | null;
+  commissionSourceAmount: string | number;
+  commissionRate: string | number;
+  commissionEarned: string | number;
+  grossSalary?: string | number;
+  bonusAmount: string | number;
+  deductionAmount: string | number;
+  totalPayable: string | number;
+  paidAmount: string | number;
+  dueAmount: string | number;
+  payrollStatus?: PayrollLifecycleStatus;
   paymentStatus: DoctorSalaryStatus;
-  paymentMethod: 'Cash' | 'bKash' | 'Nagad' | 'Bank transfer' | 'Other';
+  paymentMethod: 'Cash' | 'bKash' | 'Nagad' | 'Bank transfer' | 'Mobile Financial Service' | 'Other';
   transactionRef?: string | null;
   paymentDate: string;
   notes?: string | null;
+  structureSnapshot?: any;
+  finalizedAt?: string | null;
   recordedBy?: number | null;
   recordedByName?: string | null;
+  payments?: SalaryPaymentRecord[];
+  adjustments?: SalaryAdjustmentRecord[];
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface DoctorSalaryStructure {
+  doctorId: number;
+  doctorName: string;
+  doctorPhone?: string | null;
+  doctorRole: string;
+  doctorSpecialization?: string;
+  doctorStatus: string;
+  structureId: number | null;
+  structureCode: string;
+  salaryType: DoctorSalaryType;
+  baseRate: number;
+  commissionRate: number;
+  commissionBasis: 'treatment_revenue' | 'collected_payments' | 'eligible_charges';
+  allowances: number;
+  deductions: number;
+  effectiveDate: string;
+  reviewDate?: string | null;
+  notes?: string;
+  isActive: boolean;
+  updatedAt?: string | null;
+  liveMetrics?: {
+    visitCount: number;
+    workingDaysCount: number;
+    treatmentRevenue: number;
+    diagnosticCharges: number;
+    eligibleCharges: number;
+    collectedPayments: number;
+  };
+}
+
+export interface DoctorSalaryStructureHistory {
+  id: number;
+  structureId?: number | null;
+  doctorId: number;
+  salaryType: DoctorSalaryType;
+  baseRate: number;
+  commissionRate: number;
+  commissionBasis: string;
+  allowances: number;
+  deductions: number;
+  effectiveDate: string;
+  reviewDate?: string | null;
+  changeReason?: string | null;
+  changedByName?: string;
+  createdAt: string;
+}
+
+export interface PayrollAuditLog {
+  id: number;
+  salaryId?: number | null;
+  doctorId?: number | null;
+  userId?: number | null;
+  userRole: string;
+  action: string;
+  targetLabel: string;
+  details?: string | null;
+  createdAt: string;
 }
 
 export interface DoctorSalaryMetrics {
@@ -617,4 +770,41 @@ export interface DoctorSalaryMetrics {
   totalCollectedByDoctor: number;
   totalCollectedForDoctorVisits: number;
 }
+
+export interface BackupPreviewResponse {
+  backupType: 'CLINIC_FULL' | 'DOCTOR_SCOPED';
+  scopeLabel: string;
+  effectiveDoctorScopeId: number | null;
+  dateFilter: {
+    preset: string;
+    fromDate: string | null;
+    toDate: string | null;
+  };
+  recordCounts: Record<string, number>;
+  totalRecords: number;
+  availableModules: string[];
+}
+
+export interface BackupHistoryLog {
+  id: number;
+  backupCode: string;
+  backupType: string;
+  exportFormat: string;
+  requestedBy?: number | null;
+  requestedByName: string;
+  userRole: string;
+  doctorScopeId?: number | null;
+  datePreset: string;
+  fromDate?: string | null;
+  toDate?: string | null;
+  selectedModules: string[];
+  recordCounts: Record<string, number>;
+  totalRecords: number;
+  fileSizeBytes: number;
+  filename: string;
+  status: string;
+  failureReason?: string | null;
+  createdAt: string;
+}
+
 

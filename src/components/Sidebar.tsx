@@ -5,7 +5,6 @@ import {
   Users,
   CalendarCheck,
   CreditCard,
-  Clock,
   UserCheck,
   FileSpreadsheet,
   ShieldAlert,
@@ -15,6 +14,7 @@ import {
   Code,
   FileText,
   Wallet,
+  Crown,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -23,29 +23,58 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) => {
-  const { user, prescriptionManagementEnabled } = useAuth();
+  const { user, isFeatureAccessible, subscription } = useAuth();
   if (!user) return null;
 
   const isSuperAdmin = user.role === 'main_doctor' || user.role === 'developer';
   const isDeveloper = user.role === 'developer';
 
+  const canPatients = isFeatureAccessible('patient_management');
+  const canVisits = isFeatureAccessible('visit_management');
+  const canPrescriptions = isFeatureAccessible('prescription_management');
+  const canPayments = isFeatureAccessible('payment_management');
+  const canAppointments = isFeatureAccessible('appointment_management');
+  const canDoctors = isSuperAdmin && isFeatureAccessible('doctor_management');
+  const canPayroll = isSuperAdmin && isFeatureAccessible('salary_payroll');
+  const canBackups = isFeatureAccessible('data_backup_export');
+
   const menuItems = [
     { id: 'dashboard', label: 'Dashboard', shortLabel: 'Home', icon: LayoutDashboard },
-    { id: 'patients', label: 'Central Shared Records', shortLabel: 'Shared DB', icon: Users, badge: 'Shared' },
-    { id: 'my-patients', label: 'My Patient Records', shortLabel: 'My Patients', icon: UserCheck, badge: 'Own' },
-    { id: 'visits', label: 'Clinic Visits', shortLabel: 'Visits', icon: CalendarCheck },
-    ...(prescriptionManagementEnabled
-      ? [{ id: 'prescriptions', label: 'Prescriptions', shortLabel: 'Rx', icon: FileText, badge: 'Rx' }]
-      : []),
-    { id: 'payments', label: 'Payments & Dues', shortLabel: 'Payments', icon: CreditCard },
-    { id: 'followups', label: 'Follow-ups & SMS', shortLabel: 'SMS Hub', icon: MessageSquare, badge: 'SMS' },
-    ...(isSuperAdmin
+    ...(canPatients
       ? [
-          { id: 'doctors', label: 'Doctor Accounts', shortLabel: 'Doctors', icon: UserCheck },
-          { id: 'salary-sheet', label: 'Doctor Salary Sheet', shortLabel: 'Salary Sheet', icon: Wallet, badge: 'Salary' },
+          { id: 'patients', label: 'Central Shared Records', shortLabel: 'Shared DB', icon: Users, badge: 'Shared' },
+          { id: 'my-patients', label: 'My Patient Records', shortLabel: 'My Patients', icon: UserCheck, badge: 'Own' },
         ]
       : []),
-    { id: 'exports', label: 'CSV Exports', shortLabel: 'Exports', icon: FileSpreadsheet },
+    ...(canVisits
+      ? [{ id: 'visits', label: 'Clinic Visits', shortLabel: 'Visits', icon: CalendarCheck }]
+      : []),
+    ...(canPrescriptions
+      ? [{ id: 'prescriptions', label: 'Prescriptions', shortLabel: 'Rx', icon: FileText, badge: 'Rx' }]
+      : []),
+    ...(canPayments
+      ? [{ id: 'payments', label: 'Payments & Dues', shortLabel: 'Payments', icon: CreditCard }]
+      : []),
+    ...(canAppointments
+      ? [{ id: 'followups', label: 'Follow-ups & SMS', shortLabel: 'SMS Hub', icon: MessageSquare, badge: 'SMS' }]
+      : []),
+    ...(canDoctors
+      ? [{ id: 'doctors', label: 'Doctor Accounts', shortLabel: 'Doctors', icon: UserCheck }]
+      : []),
+    ...(canPayroll
+      ? [{ id: 'salary-sheet', label: 'Salary & Payroll', shortLabel: 'Payroll', icon: Wallet, badge: 'Payroll' }]
+      : []),
+    ...(canBackups
+      ? [
+          {
+            id: 'exports',
+            label: isSuperAdmin ? 'Backup & CSV Export' : 'My Data Backup',
+            shortLabel: 'Backup',
+            icon: FileSpreadsheet,
+            badge: 'ZIP/CSV',
+          },
+        ]
+      : []),
     ...(isSuperAdmin
       ? [{ id: 'audit-logs', label: 'Audit Logs', shortLabel: 'Audit', icon: ShieldAlert }]
       : []),
@@ -53,18 +82,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
       ? [{ id: 'settings', label: 'Clinic Settings', shortLabel: 'Settings', icon: Settings }]
       : []),
     ...(isDeveloper
-      ? [{ id: 'developer-profile', label: 'Developer Profile', shortLabel: 'Dev Profile', icon: Code, badge: 'Dev' }]
+      ? [{ id: 'developer-profile', label: 'Developer Control', shortLabel: 'Dev Control', icon: Code, badge: 'Dev' }]
       : []),
   ];
 
   // Primary 5 bottom bar items for mobile thumb-zone navigation
   const mobileBottomItems = [
     { id: 'dashboard', label: 'Home', icon: LayoutDashboard },
-    { id: 'patients', label: 'Shared DB', icon: Users },
-    { id: 'my-patients', label: 'My Patients', icon: UserCheck },
-    { id: 'followups', label: 'Follow-Up SMS', icon: MessageSquare },
-    { id: 'payments', label: 'Payments', icon: CreditCard },
-  ];
+    ...(canPatients ? [{ id: 'patients', label: 'Shared DB', icon: Users }] : []),
+    ...(canPatients ? [{ id: 'my-patients', label: 'My Patients', icon: UserCheck }] : []),
+    ...(canAppointments ? [{ id: 'followups', label: 'Follow-Up SMS', icon: MessageSquare }] : []),
+    ...(canPayments ? [{ id: 'payments', label: 'Payments', icon: CreditCard }] : []),
+  ].slice(0, 5);
 
   return (
     <>
@@ -96,11 +125,26 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
       {/* Desktop Left Sidebar */}
       <aside className="hidden md:flex md:w-64 bg-slate-900 text-slate-300 flex-col shrink-0 border-r border-slate-800">
         <div className="p-4 border-b border-slate-800">
-          <div className="text-[11px] font-semibold text-teal-400 uppercase tracking-wider">
-            Clinic Portal
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold text-teal-400 uppercase tracking-wider">
+              Clinic Portal
+            </span>
+            {subscription && (
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${
+                  subscription.status === 'Active' || subscription.status === 'Trial'
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                    : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                }`}
+                title={`Active Subscription Package: ${subscription.packageName} (${subscription.status})`}
+              >
+                <Crown className="w-2.5 h-2.5" />
+                {subscription.packageName}
+              </span>
+            )}
           </div>
           <div className="text-sm font-bold text-white truncate mt-0.5">
-            Dental Care
+            {subscription?.clinicName || 'Dental Care'}
           </div>
           <div className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1">
             <Code className="w-3 h-3 text-teal-400" />
@@ -141,10 +185,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, setCurrentTab }) =
           <div className="p-2.5 rounded-lg bg-slate-800/60 border border-slate-700/60">
             <div className="flex items-center gap-1.5 text-teal-400 font-semibold mb-1">
               <HelpCircle className="w-3.5 h-3.5" />
-              <span>Shared Patient DB</span>
+              <span>Zero Data Loss Protected</span>
             </div>
             <p className="text-[11px] text-slate-400 leading-relaxed">
-              All doctors at Dental Care share one central record per patient with full visit and SMS history.
+              All clinical, prescription, payment, and payroll records are permanently preserved in Cloud SQL.
             </p>
           </div>
         </div>

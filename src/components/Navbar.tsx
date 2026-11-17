@@ -312,7 +312,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 type="button"
                 onClick={() => setDropdownOpen(!dropdownOpen)}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 transition-colors shadow-2xs cursor-pointer"
-                title="Switch between Doctor A, Doctor B, Doctor C, Main Doctor, and Developer"
+                title="Switch between Doctor A, Doctor B, Doctor C, and Main Doctor"
               >
                 <Sparkles className="w-3.5 h-3.5 text-teal-600" />
                 <span className="hidden md:inline">Switch Doctor / Role</span>
@@ -327,38 +327,38 @@ export const Navbar: React.FC<NavbarProps> = ({
                   />
                   <div className="absolute right-0 mt-2 w-72 rounded-lg bg-white shadow-xl ring-1 ring-black/5 z-50 py-2 border border-slate-200">
                     <div className="px-3 py-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider border-b border-slate-100">
-                      Switch User (Instant Test)
+                      Switch Doctor Account
                     </div>
                     <div className="max-h-72 overflow-y-auto py-1">
-                      {accounts.map((acc) => (
-                        <button
-                          key={acc.id}
-                          type="button"
-                          onClick={() => {
-                            quickSwitch(acc.username);
-                            setDropdownOpen(false);
-                          }}
-                          className={`w-full text-left px-3 py-2 text-xs hover:bg-slate-50 transition-colors flex items-start gap-2.5 cursor-pointer ${
-                            acc.id === user.id ? 'bg-teal-50/70 border-l-2 border-teal-600' : ''
-                          }`}
-                        >
-                          <div className="mt-0.5">
-                            {acc.role === 'main_doctor' ? (
-                              <Shield className="w-3.5 h-3.5 text-emerald-600" />
-                            ) : acc.role === 'developer' ? (
-                              <Code className="w-3.5 h-3.5 text-purple-600" />
-                            ) : (
-                              <Stethoscope className="w-3.5 h-3.5 text-teal-600" />
-                            )}
-                          </div>
-                          <div>
-                            <div className="font-semibold text-slate-900">{acc.fullName}</div>
-                            <div className="text-[11px] text-slate-500">
-                              {acc.specialization || acc.role} (@{acc.username})
+                      {accounts
+                        .filter((acc) => acc.role !== 'developer')
+                        .map((acc) => (
+                          <button
+                            key={acc.id}
+                            type="button"
+                            onClick={() => {
+                              quickSwitch(acc.username);
+                              setDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 text-xs hover:bg-slate-50 transition-colors flex items-start gap-2.5 cursor-pointer ${
+                              acc.id === user.id ? 'bg-teal-50/70 border-l-2 border-teal-600' : ''
+                            }`}
+                          >
+                            <div className="mt-0.5">
+                              {acc.role === 'main_doctor' ? (
+                                <Shield className="w-3.5 h-3.5 text-emerald-600" />
+                              ) : (
+                                <Stethoscope className="w-3.5 h-3.5 text-teal-600" />
+                              )}
                             </div>
-                          </div>
-                        </button>
-                      ))}
+                            <div>
+                              <div className="font-semibold text-slate-900">{acc.fullName}</div>
+                              <div className="text-[11px] text-slate-500">
+                                {acc.specialization || acc.role} (@{acc.username})
+                              </div>
+                            </div>
+                          </button>
+                        ))}
                     </div>
                   </div>
                 </>

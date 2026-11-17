@@ -247,7 +247,12 @@ export const applicationFeatureFlags = pgTable('application_feature_flags', {
   featureKey: text('feature_key').notNull().unique(),
   featureName: text('feature_name').notNull(),
   description: text('description'),
+  moduleCategory: text('module_category').notNull().default('Clinical'),
   isEnabled: boolean('is_enabled').notNull().default(true),
+  applicableRolesJson: text('applicable_roles_json')
+    .notNull()
+    .default('["developer","main_doctor","doctor"]'),
+  configJson: text('config_json'),
   updatedBy: integer('updated_by').references(() => users.id),
   updatedAt: timestamp('updated_at').defaultNow(),
   createdAt: timestamp('created_at').defaultNow(),
@@ -718,7 +723,7 @@ export const prescriptionCustomSectionsRelations = relations(
   })
 );
 
-// Doctor Salary Sheet Table (Monthly, Daily, or Commission-Based)
+// Doctor Salary Sheet / Payroll Table (Monthly, Daily, or Commission-Based)
 export const doctorSalaries = pgTable(
   'doctor_salaries',
   {
@@ -729,32 +734,39 @@ export const doctorSalaries = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     salaryType: text('salary_type').notNull().default('Monthly'), // 'Monthly' | 'Daily' | 'Commission'
     periodLabel: text('period_label').notNull(), // e.g. 'November 2026' or '01-11-2026 to 15-11-2026'
+    payrollMonth: text('payroll_month'), // e.g. '2026-11'
+    payrollYear: integer('payroll_year'), // e.g. 2026
     periodStart: text('period_start'), // YYYY-MM-DD
     periodEnd: text('period_end'), // YYYY-MM-DD
     baseAmount: numeric('base_amount', { precision: 12, scale: 2 }).notNull().default('0'), // Monthly salary or Daily rate or Base retainer
-    daysWorked: integer('days_worked').notNull().default(0), // Used for Daily salary
-    commissionBasis: text('commission_basis').default('collected'), // 'collected' | 'billed' | 'custom'
+    daysWorked: integer('days_worked').notNull().default(0), // Approved working days used for Daily salary
+    commissionBasis: text('commission_basis').default('collected'), // 'collected' | 'billed' | 'treatment_revenue' | 'custom'
     commissionSourceAmount: numeric('commission_source_amount', { precision: 12, scale: 2 })
       .notNull()
-      .default('0'), // Total revenue/bill on which commission % is calculated
+      .default('0'), // Eligible revenue/bill on which commission % is calculated
     commissionRate: numeric('commission_rate', { precision: 6, scale: 2 })
       .notNull()
       .default('0'), // Percentage e.g. 30.00
     commissionEarned: numeric('commission_earned', { precision: 12, scale: 2 })
       .notNull()
       .default('0'), // Calculated commission amount
-    bonusAmount: numeric('bonus_amount', { precision: 12, scale: 2 }).notNull().default('0'),
+    grossSalary: numeric('gross_salary', { precision: 12, scale: 2 }).notNull().default('0'), // Calculated gross before allowances/deductions
+    bonusAmount: numeric('bonus_amount', { precision: 12, scale: 2 }).notNull().default('0'), // Allowances / Bonus
     deductionAmount: numeric('deduction_amount', { precision: 12, scale: 2 })
       .notNull()
       .default('0'),
-    totalPayable: numeric('total_payable', { precision: 12, scale: 2 }).notNull().default('0'),
+    totalPayable: numeric('total_payable', { precision: 12, scale: 2 }).notNull().default('0'), // Net Payable
     paidAmount: numeric('paid_amount', { precision: 12, scale: 2 }).notNull().default('0'),
     dueAmount: numeric('due_amount', { precision: 12, scale: 2 }).notNull().default('0'),
+    payrollStatus: text('payroll_status').notNull().default('Draft'), // 'Draft' | 'Finalized' | 'Partially Paid' | 'Paid'
     paymentStatus: text('payment_status').notNull().default('Paid'), // 'Paid' | 'Partial' | 'Pending'
-    paymentMethod: text('payment_method').notNull().default('Cash'), // 'Cash' | 'bKash' | 'Nagad' | 'Bank transfer' | 'Other'
+    paymentMethod: text('payment_method').notNull().default('Cash'), // 'Cash' | 'bKash' | 'Nagad' | 'Bank transfer' | 'Mobile Financial Service' | 'Other'
     transactionRef: text('transaction_ref'),
     paymentDate: text('payment_date').notNull(), // YYYY-MM-DD
     notes: text('notes'),
+    structureSnapshotJson: text('structure_snapshot_json'), // Immutable snapshot when finalized
+    finalizedAt: timestamp('finalized_at'),
+    finalizedBy: integer('finalized_by').references(() => users.id, { onDelete: 'set null' }),
     recordedBy: integer('recorded_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow(),
@@ -764,6 +776,7 @@ export const doctorSalaries = pgTable(
     index('idx_doctor_salaries_type').on(table.salaryType),
     index('idx_doctor_salaries_payment_date').on(table.paymentDate),
     index('idx_doctor_salaries_status').on(table.paymentStatus),
+    index('idx_doctor_salaries_payroll_month').on(table.payrollMonth),
   ]
 );
 
@@ -777,4 +790,216 @@ export const doctorSalariesRelations = relations(doctorSalaries, ({ one }) => ({
     references: [users.id],
   }),
 }));
+
+// Doctor Compensation Structure Configuration (Per-Doctor Active & Historical Structures)
+export const doctorSalaryStructures = pgTable(
+  'doctor_salary_structures',
+  {
+    id: serial('id').primaryKey(),
+    structureCode: text('structure_code').notNull().unique(), // e.g. STRUCT-1001
+    doctorId: integer('doctor_id')
+      .notNull()
+      .unique()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    salaryType: text('salary_type').notNull().default('Monthly'), // 'Monthly' | 'Daily' | 'Commission'
+    baseRate: numeric('base_rate', { precision: 12, scale: 2 }).notNull().default('0'), // Monthly fixed salary or Daily rate or base retainer
+    commissionRate: numeric('commission_rate', { precision: 6, scale: 2 }).notNull().default('0'), // %
+    commissionBasis: text('commission_basis').notNull().default('treatment_revenue'), // 'treatment_revenue' | 'collected_payments' | 'eligible_charges'
+    allowances: numeric('allowances', { precision: 12, scale: 2 }).notNull().default('0'),
+    deductions: numeric('deductions', { precision: 12, scale: 2 }).notNull().default('0'),
+    effectiveDate: text('effective_date').notNull(), // YYYY-MM-DD
+    reviewDate: text('review_date'), // YYYY-MM-DD (optional)
+    notes: text('notes'),
+    isActive: boolean('is_active').notNull().default(true),
+    createdBy: integer('created_by').references(() => users.id, { onDelete: 'set null' }),
+    updatedBy: integer('updated_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+  },
+  (table) => [
+    index('idx_doc_salary_struct_doctor').on(table.doctorId),
+    index('idx_doc_salary_struct_type').on(table.salaryType),
+  ]
+);
+
+// Doctor Salary Structure History (Immutable audit trail of compensation changes)
+export const doctorSalaryStructureHistory = pgTable(
+  'doctor_salary_structure_history',
+  {
+    id: serial('id').primaryKey(),
+    structureId: integer('structure_id').references(() => doctorSalaryStructures.id, {
+      onDelete: 'set null',
+    }),
+    doctorId: integer('doctor_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    salaryType: text('salary_type').notNull(),
+    baseRate: numeric('base_rate', { precision: 12, scale: 2 }).notNull().default('0'),
+    commissionRate: numeric('commission_rate', { precision: 6, scale: 2 }).notNull().default('0'),
+    commissionBasis: text('commission_basis').notNull().default('treatment_revenue'),
+    allowances: numeric('allowances', { precision: 12, scale: 2 }).notNull().default('0'),
+    deductions: numeric('deductions', { precision: 12, scale: 2 }).notNull().default('0'),
+    effectiveDate: text('effective_date').notNull(),
+    reviewDate: text('review_date'),
+    changeReason: text('change_reason'),
+    changedBy: integer('changed_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => [index('idx_doc_salary_struct_hist_doc').on(table.doctorId)]
+);
+
+// Individual Salary Payments (Supports multiple partial/full disbursements against one payroll record)
+export const salaryPayments = pgTable(
+  'salary_payments',
+  {
+    id: serial('id').primaryKey(),
+    paymentCode: text('payment_code').notNull().unique(), // e.g. SPAY-1001
+    salaryId: integer('salary_id')
+      .notNull()
+      .references(() => doctorSalaries.id, { onDelete: 'cascade' }),
+    doctorId: integer('doctor_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    paymentDate: text('payment_date').notNull(), // YYYY-MM-DD
+    paymentMethod: text('payment_method').notNull().default('Cash'), // 'Cash' | 'Bank Transfer' | 'Mobile Financial Service' | 'bKash' | 'Nagad' | 'Other'
+    transactionRef: text('transaction_ref'),
+    notes: text('notes'),
+    recordedBy: integer('recorded_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => [
+    index('idx_salary_payments_salary_id').on(table.salaryId),
+    index('idx_salary_payments_doctor_id').on(table.doctorId),
+    index('idx_salary_payments_date').on(table.paymentDate),
+  ]
+);
+
+// Authorized Salary & Payroll Adjustments (Requires mandatory reason & audit trail)
+export const salaryAdjustments = pgTable(
+  'salary_adjustments',
+  {
+    id: serial('id').primaryKey(),
+    salaryId: integer('salary_id')
+      .notNull()
+      .references(() => doctorSalaries.id, { onDelete: 'cascade' }),
+    doctorId: integer('doctor_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    adjustmentType: text('adjustment_type').notNull(), // 'allowance_addition' | 'deduction_addition' | 'net_correction'
+    amount: numeric('amount', { precision: 12, scale: 2 }).notNull(),
+    previousPayable: numeric('previous_payable', { precision: 12, scale: 2 }).notNull(),
+    newPayable: numeric('new_payable', { precision: 12, scale: 2 }).notNull(),
+    reason: text('reason').notNull(),
+    authorizedBy: integer('authorized_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => [index('idx_salary_adjustments_salary_id').on(table.salaryId)]
+);
+
+// Dedicated Payroll Audit Logs
+export const payrollAuditLogs = pgTable(
+  'payroll_audit_logs',
+  {
+    id: serial('id').primaryKey(),
+    salaryId: integer('salary_id').references(() => doctorSalaries.id, { onDelete: 'set null' }),
+    doctorId: integer('doctor_id').references(() => users.id, { onDelete: 'set null' }),
+    userId: integer('user_id').references(() => users.id, { onDelete: 'set null' }),
+    userRole: text('user_role').notNull(),
+    action: text('action').notNull(),
+    targetLabel: text('target_label').notNull(),
+    details: text('details'),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => [
+    index('idx_payroll_audit_salary').on(table.salaryId),
+    index('idx_payroll_audit_doctor').on(table.doctorId),
+  ]
+);
+
+// Subscription Packages Table (Developer-Configured Tiered Packages: Basic, Standard, Professional, Enterprise, etc.)
+export const subscriptionPackages = pgTable('subscription_packages', {
+  id: serial('id').primaryKey(),
+  packageKey: text('package_key').notNull().unique(), // e.g. 'basic' | 'standard' | 'professional' | 'enterprise'
+  packageName: text('package_name').notNull(), // Configurable display name
+  description: text('description'),
+  monthlyPriceBdt: numeric('monthly_price_bdt', { precision: 12, scale: 2 })
+    .notNull()
+    .default('0'),
+  annualPriceBdt: numeric('annual_price_bdt', { precision: 12, scale: 2 }).notNull().default('0'),
+  featureEntitlementsJson: text('feature_entitlements_json').notNull().default('{}'), // JSON map: featureKey -> 'ON' | 'OFF' | 'Limited'
+  limitsJson: text('limits_json').notNull().default('{}'), // JSON limits: maxDoctors, maxStaff, maxPatients, maxBranches, storageMb, monthlyBackups
+  isActive: boolean('is_active').notNull().default(true),
+  sortOrder: integer('sort_order').notNull().default(0),
+  updatedBy: integer('updated_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Clinic Subscription Assignment & Multi-Branch Readiness Table
+export const clinicSubscriptions = pgTable('clinic_subscriptions', {
+  id: serial('id').primaryKey(),
+  clinicCode: text('clinic_code').notNull().unique(), // e.g. 'DEFAULT_CLINIC'
+  clinicName: text('clinic_name').notNull().default('Dental Care'),
+  branchCode: text('branch_code').notNull().default('MAIN_BRANCH'),
+  packageId: integer('package_id').references(() => subscriptionPackages.id, {
+    onDelete: 'set null',
+  }),
+  packageKey: text('package_key').notNull().default('enterprise'),
+  packageName: text('package_name').notNull().default('Enterprise'),
+  status: text('status').notNull().default('Active'), // 'Active' | 'Trial' | 'Expired' | 'Suspended' | 'Canceled'
+  startDate: text('start_date').notNull(), // YYYY-MM-DD
+  expiryDate: text('expiry_date'), // YYYY-MM-DD (optional)
+  trialEndsAt: text('trial_ends_at'), // YYYY-MM-DD (optional)
+  notes: text('notes'),
+  assignedBy: integer('assigned_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Feature Flag & Subscription Package Audit Logs
+export const subscriptionAuditLogs = pgTable('subscription_audit_logs', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id, { onDelete: 'set null' }),
+  userRole: text('user_role').notNull(),
+  action: text('action').notNull(), // 'TOGGLE_FEATURE' | 'REGISTER_FEATURE' | 'UPDATE_PACKAGE' | 'ASSIGN_SUBSCRIPTION'
+  targetKey: text('target_key').notNull(),
+  previousStateJson: text('previous_state_json'),
+  newStateJson: text('new_state_json'),
+  details: text('details'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Backup & Export History Logs Table
+export const backupHistoryLogs = pgTable(
+  'backup_history_logs',
+  {
+    id: serial('id').primaryKey(),
+    backupCode: text('backup_code').notNull().unique(), // e.g. BKP-20261117-1001
+    backupType: text('backup_type').notNull(), // 'complete_clinic_backup' | 'doctor_specific_backup' | 'module_csv_export' | 'full_recovery_snapshot'
+    exportFormat: text('export_format').notNull(), // 'ZIP' | 'CSV' | 'JSON_RECOVERY'
+    requestedBy: integer('requested_by').references(() => users.id, { onDelete: 'set null' }),
+    requestedByName: text('requested_by_name').notNull(),
+    userRole: text('user_role').notNull(),
+    doctorScopeId: integer('doctor_scope_id'), // Non-null when scoped to an individual doctor
+    datePreset: text('date_preset').notNull().default('all'),
+    fromDate: text('from_date'),
+    toDate: text('to_date'),
+    selectedModulesJson: text('selected_modules_json').notNull().default('[]'),
+    recordCountsJson: text('record_counts_json').notNull().default('{}'),
+    totalRecords: integer('total_records').notNull().default(0),
+    fileSizeBytes: integer('file_size_bytes').notNull().default(0),
+    filename: text('filename').notNull(),
+    status: text('status').notNull().default('Success'), // 'Success' | 'Failed' | 'Partial'
+    failureReason: text('failure_reason'),
+    manifestJson: text('manifest_json'),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => [
+    index('idx_backup_history_user').on(table.requestedBy),
+    index('idx_backup_history_doc_scope').on(table.doctorScopeId),
+    index('idx_backup_history_created').on(table.createdAt),
+  ]
+);
+
 

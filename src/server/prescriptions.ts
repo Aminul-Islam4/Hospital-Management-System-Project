@@ -26,6 +26,7 @@ import {
 } from './auth.ts';
 import { recalculatePatientFinancials } from './financials.ts';
 import { generatePrescriptionPdfBuffer } from './prescriptionPdfService.ts';
+import { checkUserFeatureAccess } from './featureControl.ts';
 import { eq, desc, asc, and, or, sql, inArray } from 'drizzle-orm';
 
 export const prescriptionsRouter = Router();
@@ -65,18 +66,18 @@ async function getPrescriptionFeatureFlag() {
   return retry[0];
 }
 
-// Middleware: Validates global Developer Feature Toggle on EVERY prescription request
+// Middleware: Validates 3-Layer Feature Authorization (Global Flag + Package Entitlement + Role) on EVERY prescription request
 export async function requirePrescriptionFeature(
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ) {
   try {
-    const flag = await getPrescriptionFeatureFlag();
-    if (!flag || !flag.isEnabled) {
+    const check = await checkUserFeatureAccess(PRESCRIPTION_FEATURE_KEY, req.user?.role || '');
+    if (!check.allowed) {
       return res.status(403).json({
-        error: FEATURE_DISABLED_MESSAGE,
-        code: 'FEATURE_DISABLED',
+        error: check.reason || FEATURE_DISABLED_MESSAGE,
+        code: check.code || 'FEATURE_DISABLED',
       });
     }
     next();
@@ -578,85 +579,6 @@ async function syncPrescriptionClinicalRecords(
   // 6. Recalculate cumulative visit & patient financials cleanly inside transaction
   await recalculatePatientFinancials(params.patientId, tx);
 }
-
-// ==========================================
-// 1. FEATURE FLAG MANAGEMENT ROUTES
-// ==========================================
-
-// Read active feature flags (Any authenticated user)
-prescriptionsRouter.get('/features', authenticateToken, async (req: AuthenticatedRequest, res) => {
-  try {
-    const flag = await getPrescriptionFeatureFlag();
-    const allFlags = await db
-      .select({
-        id: applicationFeatureFlags.id,
-        featureKey: applicationFeatureFlags.featureKey,
-        featureName: applicationFeatureFlags.featureName,
-        description: applicationFeatureFlags.description,
-        isEnabled: applicationFeatureFlags.isEnabled,
-        updatedAt: applicationFeatureFlags.updatedAt,
-      })
-      .from(applicationFeatureFlags)
-      .orderBy(asc(applicationFeatureFlags.id));
-
-    res.json({
-      prescriptionManagement: Boolean(flag?.isEnabled),
-      flags: allFlags,
-    });
-  } catch (error) {
-    console.error('Failed to fetch feature flags:', error);
-    res.status(500).json({ error: 'Failed to load application feature flags' });
-  }
-});
-
-// Toggle feature flag (ONLY Developer role allowed; Super Admin & Doctor are strictly blocked)
-prescriptionsRouter.put(
-  '/developer/features/:key',
-  authenticateToken,
-  requireRoles('developer'),
-  async (req: AuthenticatedRequest, res) => {
-    try {
-      const { key } = req.params;
-      const { isEnabled } = req.body;
-
-      if (typeof isEnabled !== 'boolean') {
-        return res.status(400).json({ error: 'isEnabled boolean value is required.' });
-      }
-
-      if (key !== PRESCRIPTION_FEATURE_KEY) {
-        return res.status(404).json({ error: `Feature flag "${key}" not found.` });
-      }
-
-      await getPrescriptionFeatureFlag();
-
-      const [updated] = await db
-        .update(applicationFeatureFlags)
-        .set({
-          isEnabled,
-          updatedBy: req.user!.id,
-          updatedAt: new Date(),
-        })
-        .where(eq(applicationFeatureFlags.featureKey, key))
-        .returning();
-
-      await logAudit(
-        req.user,
-        'TOGGLE_FEATURE_FLAG',
-        `Feature: ${updated.featureName}`,
-        `System developer ${req.user!.fullName} set ${updated.featureName} to ${isEnabled ? 'ON (Enabled)' : 'OFF (Disabled)'}`
-      );
-
-      res.json({
-        success: true,
-        flag: updated,
-        prescriptionManagement: updated.isEnabled,
-      });
-    } catch (error) {
-      console.error('Feature toggle failed:', error);
-      res.status(500).json({ error: 'Failed to update feature flag' });
-    }
-  }
-);
 
 // ==========================================
 // 2. PRESCRIPTION MODULE ROUTES (ALL GUARDED BY FEATURE FLAG)
